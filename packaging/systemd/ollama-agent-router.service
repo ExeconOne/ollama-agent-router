@@ -1,0 +1,19 @@
+[Unit]
+Description=Ollama Agent Router
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ollama-agent-router
+Group=ollama-agent-router
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node /usr/lib/ollama-agent-router/dist/cli.js serve --config /etc/ollama-agent-router/config.yaml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

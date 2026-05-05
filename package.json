@@ -1,0 +1,81 @@
+{
+  "name": "ollama-agent-router",
+  "version": "0.1.0",
+  "description": "Intelligent OpenAI-compatible router for Ollama with model selection, GPU/CPU-aware queues, async jobs, and CLI configuration.",
+  "type": "module",
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ExeconOne/ollama-agent-router.git"
+  },
+  "keywords": [
+    "ollama",
+    "openai",
+    "openai-compatible",
+    "llm",
+    "local-llm",
+    "ai-router",
+    "model-router",
+    "agent-router",
+    "gpu",
+    "vram",
+    "queue",
+    "async-jobs",
+    "nvidia",
+    "cli",
+    "typescript",
+    "nodejs"
+  ],
+  "homepage": "https://github.com/ExeconOne/ollama-agent-router#readme",
+  "bugs": {
+    "url": "https://github.com/ExeconOne/ollama-agent-router/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "ollama-agent-router": "dist/cli.js",
+    "oar": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "examples",
+    "packaging",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts serve",
+    "build": "tsup",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/cli.js serve",
+    "package:deb": "nfpm package --config packaging/nfpm.yaml --packager deb",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "express": "^4.21.2",
+    "nanoid": "^5.0.9",
+    "p-queue": "^8.1.0",
+    "pino": "^9.5.0",
+    "pino-http": "^10.4.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "node-mocks-http": "^1.16.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

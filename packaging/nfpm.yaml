@@ -1,0 +1,27 @@
+name: ollama-agent-router
+arch: amd64
+platform: linux
+version: 0.1.0
+section: utils
+priority: optional
+maintainer: ollama-agent-router contributors
+description: Intelligent HTTP and CLI router for Ollama.
+license: MIT
+homepage: https://github.com/ExeconOne/ollama-agent-router
+contents:
+  - src: ./dist
+    dst: /usr/lib/ollama-agent-router/dist
+  - src: ./examples/gex44.yaml
+    dst: /usr/share/ollama-agent-router/examples/gex44.yaml
+  - src: ./packaging/systemd/ollama-agent-router.service
+    dst: /lib/systemd/system/ollama-agent-router.service
+  - src: ./README.md
+    dst: /usr/share/doc/ollama-agent-router/README.md
+  - src: ./LICENSE
+    dst: /usr/share/doc/ollama-agent-router/LICENSE
+scripts:
+  postinstall: packaging/nfpm/postinstall.sh
+overrides:
+  deb:
+    depends:
+      - nodejs

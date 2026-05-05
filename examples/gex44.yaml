@@ -1,0 +1,111 @@
+server:
+  host: 127.0.0.1
+  port: 11435
+  basePath: /
+  requestBodyLimit: 8mb
+  https:
+    enabled: false
+    certPath:
+    keyPath:
+    caPath:
+ollama:
+  baseUrl: http://127.0.0.1:11434
+  openAiCompatiblePath: /v1/chat/completions
+  nativeApiBasePath: /api
+  keepAlive: 10m
+  requestTimeoutMs: 180000
+gpu:
+  provider: nvidia
+  name: RTX 4000 SFF Ada
+  vramTotalMb: 20480
+  vramSafetyReserveMb: 1536
+  maxGpuUtilizationPct: 92
+  requireGpuOnlyByDefault: true
+  monitor:
+    enabled: true
+    intervalMs: 5000
+    nvidiaSmiPath: nvidia-smi
+router:
+  defaultMode: auto
+  syncMaxQueueTimeMs: 250
+  heavyLoadQueueDepth: 3
+  heavyLoadGpuFreeMbThreshold: 3072
+  defaultTaskType: unknown
+  classification:
+    mode: heuristic
+    optionalClassifierModel: B-A-M-N/vibethinker:1.5b
+    classifierTimeoutMs: 1500
+jobs:
+  store: memory
+  resultTtlSeconds: 86400
+  maxAttempts: 2
+  cleanupIntervalMs: 60000
+models:
+  - name: B-A-M-N/vibethinker:1.5b
+    sizeGb: 3.6
+    purpose: [triage, simple_chat, summarize, classification]
+    priority: 50
+    maxConcurrent: 2
+    defaultContext: 4096
+    maxContext: 8192
+    timeoutMs: 90000
+    costClass: low
+    exclusive: false
+    allowWhenBusy: true
+    tags: [fast, chat, summarize]
+  - name: qwen2.5-coder:7b
+    sizeGb: 4.7
+    purpose: [code_generate, code_fix, tool_use, simple_agent]
+    priority: 70
+    maxConcurrent: 1
+    defaultContext: 8192
+    maxContext: 32768
+    timeoutMs: 180000
+    costClass: medium
+    exclusive: false
+    allowWhenBusy: true
+    tags: [code, agentic_reasoning, fallback]
+  - name: deepseek-coder:6.7b
+    sizeGb: 3.8
+    purpose: [code_review, code_generate, code_fix, second_opinion]
+    priority: 68
+    maxConcurrent: 1
+    defaultContext: 8192
+    maxContext: 16384
+    timeoutMs: 180000
+    costClass: medium
+    exclusive: false
+    allowWhenBusy: true
+    tags: [code, review]
+  - name: gpt-oss:20b
+    sizeGb: 14.0
+    purpose: [agentic_reasoning, large_context, planning, tool_use, complex_debugging]
+    priority: 95
+    maxConcurrent: 1
+    defaultContext: 16384
+    maxContext: 65536
+    timeoutMs: 300000
+    costClass: high
+    exclusive: true
+    allowWhenBusy: false
+    tags: [reasoning, large_context, tool_use]
+routes:
+  triage: [B-A-M-N/vibethinker:1.5b]
+  simple_chat: [B-A-M-N/vibethinker:1.5b, qwen2.5-coder:7b]
+  summarize: [B-A-M-N/vibethinker:1.5b]
+  code_generate: [qwen2.5-coder:7b, deepseek-coder:6.7b]
+  code_review: [deepseek-coder:6.7b, qwen2.5-coder:7b]
+  code_fix: [qwen2.5-coder:7b, deepseek-coder:6.7b]
+  agentic_reasoning: [gpt-oss:20b, qwen2.5-coder:7b]
+  large_context: [gpt-oss:20b, qwen2.5-coder:7b]
+  tool_use: [qwen2.5-coder:7b, gpt-oss:20b]
+  unknown: [B-A-M-N/vibethinker:1.5b, qwen2.5-coder:7b]
+  simple_agent: [qwen2.5-coder:7b]
+  planning: [gpt-oss:20b]
+  complex_debugging: [gpt-oss:20b, qwen2.5-coder:7b]
+queue:
+  globalMaxConcurrent: 3
+  globalMaxQueued: 100
+  perUserMaxQueued: 20
+  defaultPriority: normal
+  timeoutMs: 180000
