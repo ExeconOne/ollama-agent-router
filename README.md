@@ -197,7 +197,7 @@ curl http://127.0.0.1:11435/v1/router/gpu
 
 ## Kong Runtime Agent API
 
-When used with `kong-ollama-router`, this process acts as a local runtime agent. Kong owns public request validation, classification, model selection, and response enrichment. The node-router supplies machine-local state and executes the model selected by Kong.
+When used with `kong-ollama-agent-router`, this process acts as a local runtime agent. Kong owns public request validation, classification, model selection, and response enrichment. The node-router supplies machine-local state and executes the model selected by Kong.
 
 Kong-facing endpoints:
 

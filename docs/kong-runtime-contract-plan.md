@@ -1,8 +1,8 @@
-# Plan zmian: kontrakt dla kong-ollama-router
+# Plan zmian: kontrakt dla kong-ollama-agent-router
 
 Ten dokument rozpisuje zmiany po stronie `ollama-node-router`, ktore sa potrzebne,
-zeby `kong-ollama-router` mogl uzywac go jako lokalnego runtime agenta zgodnie z
-`kong-ollama-router/HLD.md`.
+zeby `kong-ollama-agent-router` mogl uzywac go jako lokalnego runtime agenta zgodnie z
+`kong-ollama-agent-router/HLD.md`.
 
 ## 1. Cel
 
