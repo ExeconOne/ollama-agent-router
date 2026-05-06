@@ -15,15 +15,11 @@ env:
   HOMEBREW_TAP_REPOSITORY: ExeconOne/homebrew-tap
 
 jobs:
-  publish:
-    name: Publish npm, GitHub Release, and APT repo
+  verify:
+    name: Verify release
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      npm_sha256: ${{ steps.npm_tarball.outputs.sha256 }}
 
     steps:
       - name: Checkout
@@ -64,6 +60,41 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check package contents
+        run: npm pack --dry-run
+
+      - name: Check Homebrew formula syntax
+        run: ruby -c packaging/homebrew/ollama-agent-router.rb
+
+  publish:
+    name: Publish npm, GitHub Release, and APT repo
+    runs-on: ubuntu-latest
+    needs: verify
+    outputs:
+      version: ${{ needs.verify.outputs.version }}
+      npm_sha256: ${{ steps.npm_tarball.outputs.sha256 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build
+        run: npm run build
+
       - name: Publish to npm
         run: npm publish --access public
 
@@ -74,7 +105,7 @@ jobs:
           mkdir -p artifacts/npm
           # npm registry metadata can lag for a few seconds immediately after publish.
           for attempt in 1 2 3 4 5; do
-            TARBALL_URL="$(npm view "$PACKAGE_NAME@${{ steps.meta.outputs.version }}" dist.tarball 2>/dev/null || true)"
+            TARBALL_URL="$(npm view "$PACKAGE_NAME@${{ needs.verify.outputs.version }}" dist.tarball 2>/dev/null || true)"
             if [ -n "$TARBALL_URL" ]; then
               break
             fi
@@ -84,14 +115,14 @@ jobs:
             echo "Could not resolve published npm tarball" >&2
             exit 1
           fi
-          curl -fsSL "$TARBALL_URL" -o "artifacts/npm/$PACKAGE_NAME-${{ steps.meta.outputs.version }}.tgz"
-          SHA256="$(sha256sum "artifacts/npm/$PACKAGE_NAME-${{ steps.meta.outputs.version }}.tgz" | awk '{print $1}')"
+          curl -fsSL "$TARBALL_URL" -o "artifacts/npm/$PACKAGE_NAME-${{ needs.verify.outputs.version }}.tgz"
+          SHA256="$(sha256sum "artifacts/npm/$PACKAGE_NAME-${{ needs.verify.outputs.version }}.tgz" | awk '{print $1}')"
           echo "tarball_url=$TARBALL_URL" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
       - name: Prepare nFPM config
         run: |
-          sed -i "s/^version:.*/version: ${{ steps.meta.outputs.version }}/" packaging/nfpm.yaml
+          sed -i "s/^version:.*/version: ${{ needs.verify.outputs.version }}/" packaging/nfpm.yaml
 
       - name: Prepare deb runtime dependencies
         run: |

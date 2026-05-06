@@ -319,7 +319,7 @@ Configure npm Trusted Publishing for the package:
 - Organization or user: `ExeconOne`
 - Repository: `ollama-agent-router`
 - Workflow filename: `release.yml`
-- Environment name: `github-pages`
+- Environment name: leave blank
 
 Required repository secrets:
 
@@ -330,6 +330,7 @@ Required repository secrets:
 GitHub Pages must be enabled with source set to GitHub Actions.
 The APT repository is always signed; releases fail if `APT_GPG_PRIVATE_KEY` is not configured.
 The release workflow runs npm on Node.js 24 because npm Trusted Publishing requires npm CLI 11.5.1+ and Node.js 22.14.0+.
+The release workflow has its own verify job; npm, GitHub Release, APT, and Homebrew publishing only run after typecheck, tests, build, package dry-run, and Homebrew formula syntax checks pass.
 
 Release flow:
 
