@@ -311,16 +311,25 @@ Design notes:
 ## Release Guide
 
 Releases are automated through GitHub Actions when pushing a version tag.
+Publishing to npm uses Trusted Publishing/OIDC, so no `NPM_TOKEN` secret is required.
+
+Configure npm Trusted Publishing for the package:
+
+- Provider: GitHub Actions
+- Organization or user: `ExeconOne`
+- Repository: `ollama-agent-router`
+- Workflow filename: `release.yml`
+- Environment name: `github-pages`
 
 Required repository secrets:
 
-- `NPM_TOKEN`: npm automation token with publish access.
 - `TAP_GITHUB_TOKEN`: GitHub token with write access to `ExeconOne/homebrew-tap`.
 - `APT_GPG_PRIVATE_KEY`: ASCII-armored private GPG key.
 - `APT_GPG_PASSPHRASE`: passphrase for that key, if any.
 
 GitHub Pages must be enabled with source set to GitHub Actions.
 The APT repository is always signed; releases fail if `APT_GPG_PRIVATE_KEY` is not configured.
+The release workflow runs npm on Node.js 24 because npm Trusted Publishing requires npm CLI 11.5.1+ and Node.js 22.14.0+.
 
 Release flow:
 
