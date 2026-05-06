@@ -18,10 +18,25 @@ Request flow:
 
 ## Quick Start
 
+Install with Homebrew on macOS or Linux:
+
 ```bash
-npm install
-npm run build
-npm link
+brew install ExeconOne/tap/ollama-agent-router
+ollama-agent-router configure
+ollama-agent-router serve --config ollama-agent-router.yaml
+```
+
+Or install from the APT repository on Debian/Ubuntu:
+
+```bash
+curl -fsSL https://execonone.github.io/ollama-agent-router/apt/gpg.key \
+  | sudo gpg --dearmor -o /usr/share/keyrings/ollama-agent-router.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/ollama-agent-router.gpg] https://execonone.github.io/ollama-agent-router/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/ollama-agent-router.list
+
+sudo apt-get update
+sudo apt-get install ollama-agent-router
 ollama-agent-router configure
 ollama-agent-router serve --config ollama-agent-router.yaml
 ```
