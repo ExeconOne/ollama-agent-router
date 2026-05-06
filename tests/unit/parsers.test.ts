@@ -12,10 +12,12 @@ gpt-oss:20b                def456          14 GB     63%/37% CPU/GPU  1 hour fro
 it('parses nvidia-smi csv output', () => {
   const rows = parseNvidiaSmi('RTX 4000 SFF Ada, 20480, 1024, 19456, 12');
   expect(rows[0]).toEqual({
+    provider: 'nvidia',
     name: 'RTX 4000 SFF Ada',
     vramTotalMb: 20480,
     vramUsedMb: 1024,
     vramFreeMb: 19456,
-    utilizationPct: 12
+    utilizationPct: 12,
+    snapshotAgeMs: 0
   });
 });

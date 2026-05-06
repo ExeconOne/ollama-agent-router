@@ -4,7 +4,10 @@ import { AppConfig, ChatCompletionRequest, JobRecord, JobStatus, TaskType } from
 export class InMemoryJobStore {
   private readonly jobs = new Map<string, JobRecord>();
 
-  constructor(private readonly config: AppConfig['jobs']) {}
+  constructor(
+    private readonly config: AppConfig['jobs'],
+    private readonly nodeId = 'local'
+  ) {}
 
   create(input: {
     taskType: TaskType;
@@ -14,7 +17,7 @@ export class InMemoryJobStore {
   }): JobRecord {
     const now = new Date();
     const record: JobRecord = {
-      id: `job_${nanoid(16)}`,
+      id: `job_${this.nodeId}_${nanoid(16)}`,
       status: 'queued',
       task_type: input.taskType,
       selected_model: input.selectedModel,
@@ -42,6 +45,33 @@ export class InMemoryJobStore {
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .slice(0, limit)
       .map((job) => ({ ...job }));
+  }
+
+  summary(): {
+    queued: number;
+    running: number;
+    succeededRetained: number;
+    failedRetained: number;
+    cancelledRetained: number;
+    expiredRetained: number;
+  } {
+    const counts = {
+      queued: 0,
+      running: 0,
+      succeededRetained: 0,
+      failedRetained: 0,
+      cancelledRetained: 0,
+      expiredRetained: 0
+    };
+    for (const job of this.jobs.values()) {
+      if (job.status === 'queued') counts.queued += 1;
+      if (job.status === 'running') counts.running += 1;
+      if (job.status === 'succeeded') counts.succeededRetained += 1;
+      if (job.status === 'failed') counts.failedRetained += 1;
+      if (job.status === 'cancelled') counts.cancelledRetained += 1;
+      if (job.status === 'expired') counts.expiredRetained += 1;
+    }
+    return counts;
   }
 
   markRunning(id: string): JobRecord | undefined {

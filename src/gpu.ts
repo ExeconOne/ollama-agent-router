@@ -14,11 +14,13 @@ export class StaticGpuMonitor implements GpuMonitor {
   async snapshot(): Promise<GpuSnapshot | undefined> {
     if (this.config.provider === 'none') return undefined;
     return {
+      provider: this.config.provider,
       name: this.config.name ?? 'Configured GPU',
       vramTotalMb: this.config.vramTotalMb,
       vramUsedMb: 0,
       vramFreeMb: this.config.vramTotalMb,
-      utilizationPct: 0
+      utilizationPct: 0,
+      snapshotAgeMs: 0
     };
   }
 }
@@ -51,11 +53,13 @@ export function parseNvidiaSmi(output: string): GpuSnapshot[] {
     .map((line) => {
       const [name, total, used, free, utilization] = line.split(',').map((part) => part.trim());
       return {
+        provider: 'nvidia' as const,
         name,
         vramTotalMb: Number(total),
         vramUsedMb: Number(used),
         vramFreeMb: Number(free),
-        utilizationPct: Number(utilization)
+        utilizationPct: Number(utilization),
+        snapshotAgeMs: 0
       };
     })
     .filter((gpu) => gpu.name && Number.isFinite(gpu.vramTotalMb));

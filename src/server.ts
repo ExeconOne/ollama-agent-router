@@ -1,17 +1,20 @@
 import http from 'node:http';
 import https from 'node:https';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import express, { NextFunction, Request, Response } from 'express';
 import { pinoHttp } from 'pino-http';
 import { z } from 'zod';
 import { classifyTask } from './classifier.js';
-import { AppConfig, ChatCompletionRequest } from './types.js';
+import { AppConfig, ChatCompletionRequest, Classification, ModelSpec, NodeCapabilities, RuntimeSnapshot, taskTypes } from './types.js';
 import { GpuMonitor } from './gpu.js';
-import { OllamaClient } from './ollama.js';
+import { OllamaClient, OllamaHttpError } from './ollama.js';
 import { RoutingEngine, normalizeRouterMetadata, priorityWeights } from './router-engine.js';
 import { QueueManager } from './queue-manager.js';
 import { InMemoryJobStore, parseJobError, parseJobResult } from './job-store.js';
 import { logger } from './logger.js';
+
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
 const chatRequestSchema = z
   .object({
@@ -34,6 +37,41 @@ const chatRequestSchema = z
   })
   .passthrough();
 
+const classificationSchema = z
+  .object({
+    taskType: z.enum(taskTypes).optional(),
+    complexity: z.enum(['light', 'medium', 'heavy']).optional(),
+    requiresLargeContext: z.boolean().optional(),
+    requiresToolUse: z.boolean().optional(),
+    confidence: z.number().min(0).max(1).optional()
+  })
+  .optional();
+
+const routerDecisionSchema = z
+  .object({
+    taskType: z.enum(taskTypes).optional(),
+    score: z.number().optional(),
+    reason: z.string().optional(),
+    priority: z.enum(['low', 'normal', 'high']).optional()
+  })
+  .passthrough()
+  .optional();
+
+const executeRequestSchema = z.object({
+  selectedModel: z.string().min(1),
+  request: chatRequestSchema,
+  priority: z.enum(['low', 'normal', 'high']).optional(),
+  routerDecision: routerDecisionSchema
+});
+
+const createRouterJobSchema = z.object({
+  selectedModel: z.string().min(1),
+  request: chatRequestSchema,
+  classification: classificationSchema,
+  priority: z.enum(['low', 'normal', 'high']).optional(),
+  routerDecision: routerDecisionSchema
+});
+
 export interface ServerDependencies {
   ollama: OllamaClient;
   gpu: GpuMonitor;
@@ -55,12 +93,32 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     res.json({ status: 'ok', service: 'ollama-agent-router' });
   });
 
-  api.get('/metrics', (_req, res) => {
+  api.get('/metrics', async (_req, res) => {
     const snapshot = deps.queue.snapshot();
+    const jobSummary = deps.jobs.summary();
+    const jobsByStatusAndModel = countJobsByStatusAndModel(deps.jobs.list(Number.MAX_SAFE_INTEGER));
+    const [gpu, ollamaReachable] = await Promise.all([safeGpu(deps.gpu), safeOllamaReachable(deps.ollama)]);
     res.type('text/plain').send(
       [
         `oar_queue_global_queued ${snapshot.globalQueued}`,
         `oar_queue_global_running ${snapshot.globalRunning}`,
+        `oar_ollama_reachable ${ollamaReachable ? 1 : 0}`,
+        ...(gpu
+          ? [
+              `oar_gpu_vram_free_mb ${gpu.vramFreeMb}`,
+              `oar_gpu_utilization_pct ${gpu.utilizationPct}`
+            ]
+          : []),
+        `oar_jobs_total{status="queued"} ${jobSummary.queued}`,
+        `oar_jobs_total{status="running"} ${jobSummary.running}`,
+        `oar_jobs_total{status="succeeded"} ${jobSummary.succeededRetained}`,
+        `oar_jobs_total{status="failed"} ${jobSummary.failedRetained}`,
+        `oar_jobs_total{status="cancelled"} ${jobSummary.cancelledRetained}`,
+        `oar_jobs_total{status="expired"} ${jobSummary.expiredRetained}`,
+        ...jobsByStatusAndModel.map(
+          (item) =>
+            `oar_jobs_total{status="${escapeMetricLabel(item.status)}",model="${escapeMetricLabel(item.model)}"} ${item.count}`
+        ),
         ...snapshot.byModel.flatMap((item) => [
           `oar_model_queue_depth{model="${escapeMetricLabel(item.model)}"} ${item.queued}`,
           `oar_model_running{model="${escapeMetricLabel(item.model)}"} ${item.running}`
@@ -69,9 +127,22 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     );
   });
 
+  api.get('/v1/router/capabilities', (_req, res) => {
+    res.json(buildCapabilities(config));
+  });
+
+  api.get('/v1/router/runtime', async (_req, res, next) => {
+    try {
+      res.json(await buildRuntimeSnapshot(config, deps));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   api.get('/v1/router/status', async (_req, res, next) => {
     try {
       res.json({
+        nodeId: config.server.nodeId,
         service: 'ollama-agent-router',
         queue: deps.queue.snapshot(),
         gpu: await safeGpu(deps.gpu),
@@ -130,6 +201,67 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     const job = deps.jobs.cancel(req.params.jobId);
     if (!job) return res.status(404).json({ error: { message: 'Job not found' } });
     return res.json(job);
+  });
+
+  api.post('/v1/router/execute', async (req, res, next) => {
+    try {
+      const payload = executeRequestSchema.parse(req.body);
+      if (payload.request.stream) {
+        return res.status(400).json({ error: { message: 'Streaming is not supported by ollama-agent-router v1' } });
+      }
+      const model = findConfiguredModel(config, payload.selectedModel);
+      if (!model) {
+        return res.status(404).json({ error: { message: `Unknown configured model: ${payload.selectedModel}` } });
+      }
+
+      const priorityName = payload.priority ?? payload.routerDecision?.priority ?? config.queue.defaultPriority;
+      const output = await deps.queue.runSync({
+        model,
+        request: payload.request as ChatCompletionRequest,
+        priority: priorityWeights[priorityName],
+        timeoutMs: payload.request.router?.maxExecutionTimeMs ?? config.queue.timeoutMs
+      });
+      return res.json({
+        result: output.result,
+        nodeId: config.server.nodeId,
+        selectedModel: model.name,
+        queueTimeMs: output.queueTimeMs,
+        executionTimeMs: output.executionTimeMs
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  api.post('/v1/router/jobs', (req, res, next) => {
+    try {
+      const payload = createRouterJobSchema.parse(req.body);
+      if (payload.request.stream) {
+        return res.status(400).json({ error: { message: 'Streaming is not supported by ollama-agent-router v1' } });
+      }
+      const model = findConfiguredModel(config, payload.selectedModel);
+      if (!model) {
+        return res.status(404).json({ error: { message: `Unknown configured model: ${payload.selectedModel}` } });
+      }
+
+      const classification = normalizeClassification(config, payload.classification);
+      const priorityName = payload.priority ?? payload.routerDecision?.priority ?? config.queue.defaultPriority;
+      const job = deps.queue.enqueueAsync({
+        model,
+        request: payload.request as ChatCompletionRequest,
+        classification,
+        priority: priorityWeights[priorityName]
+      });
+      return res.status(202).json({
+        id: job.id,
+        status: 'queued',
+        position: job.position,
+        nodeId: config.server.nodeId,
+        selectedModel: model.name
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   api.post('/v1/chat/completions', async (req, res, next) => {
@@ -206,11 +338,79 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = error instanceof Error ? error.message : String(error);
-    const status = error instanceof z.ZodError ? 400 : 500;
+    const status = error instanceof z.ZodError ? 400 : error instanceof OllamaHttpError ? 502 : 500;
     res.status(status).json({ error: { message } });
   });
 
   return app;
+}
+
+function buildCapabilities(config: AppConfig): NodeCapabilities {
+  return {
+    nodeId: config.server.nodeId,
+    status: 'ok',
+    version: packageJson.version,
+    router: config.router,
+    gpu: {
+      requireGpuOnlyByDefault: config.gpu.requireGpuOnlyByDefault,
+      vramSafetyReserveMb: config.gpu.vramSafetyReserveMb
+    },
+    queue: {
+      defaultPriority: config.queue.defaultPriority,
+      timeoutMs: config.queue.timeoutMs
+    },
+    models: config.models,
+    routes: config.routes
+  };
+}
+
+async function buildRuntimeSnapshot(config: AppConfig, deps: ServerDependencies): Promise<RuntimeSnapshot> {
+  const [ollamaReachable, loadedModels, gpu] = await Promise.all([
+    safeOllamaReachable(deps.ollama),
+    safeLoadedModels(deps.ollama),
+    safeGpu(deps.gpu)
+  ]);
+  const status = ollamaReachable ? (config.gpu.monitor.enabled && config.gpu.provider !== 'none' && !gpu ? 'degraded' : 'ok') : 'unavailable';
+  return {
+    nodeId: config.server.nodeId,
+    status,
+    timestamp: new Date().toISOString(),
+    ollama: {
+      baseUrl: config.ollama.baseUrl,
+      reachable: ollamaReachable
+    },
+    gpu: gpu ? { provider: config.gpu.provider, snapshotAgeMs: 0, ...gpu } : undefined,
+    loadedModels,
+    queues: deps.queue.snapshot(),
+    jobs: deps.jobs.summary()
+  };
+}
+
+function findConfiguredModel(config: AppConfig, selectedModel: string): ModelSpec | undefined {
+  return config.models.find((model) => model.name === selectedModel);
+}
+
+function normalizeClassification(config: AppConfig, classification: Partial<Classification> | undefined): Classification {
+  return {
+    taskType: classification?.taskType ?? config.router.defaultTaskType,
+    complexity: classification?.complexity ?? 'medium',
+    requiresLargeContext: classification?.requiresLargeContext ?? false,
+    requiresToolUse: classification?.requiresToolUse ?? false,
+    confidence: classification?.confidence ?? 1
+  };
+}
+
+function countJobsByStatusAndModel(jobs: ReturnType<InMemoryJobStore['list']>): Array<{ status: string; model: string; count: number }> {
+  const counts = new Map<string, { status: string; model: string; count: number }>();
+  for (const job of jobs) {
+    const status = job.status;
+    const model = job.selected_model ?? 'unknown';
+    const key = `${status}\0${model}`;
+    const current = counts.get(key) ?? { status, model, count: 0 };
+    current.count += 1;
+    counts.set(key, current);
+  }
+  return [...counts.values()];
 }
 
 export async function startServer(config: AppConfig, deps: ServerDependencies): Promise<{ close: () => Promise<void> }> {
@@ -278,6 +478,14 @@ async function safeGpu(gpu: GpuMonitor) {
     return await gpu.snapshot();
   } catch {
     return undefined;
+  }
+}
+
+async function safeOllamaReachable(ollama: OllamaClient): Promise<boolean> {
+  try {
+    return await ollama.health();
+  } catch {
+    return false;
   }
 }
 

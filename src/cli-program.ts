@@ -30,7 +30,7 @@ export function createProgram(): Command {
     .option('-c, --config <path>', 'config file path')
     .action(async (options) => {
       const { config, path } = await loadConfig(options.config ?? program.opts().config);
-      const jobs = new InMemoryJobStore(config.jobs);
+      const jobs = new InMemoryJobStore(config.jobs, config.server.nodeId);
       const ollama = new HttpOllamaClient(config.ollama);
       const gpu = new NvidiaGpuMonitor(config.gpu);
       const queue = new QueueManager(config, ollama, jobs);

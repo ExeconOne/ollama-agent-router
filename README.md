@@ -116,6 +116,7 @@ Server options:
 
 ```yaml
 server:
+  nodeId: local
   host: 127.0.0.1
   port: 11435
   basePath: /
@@ -127,12 +128,13 @@ server:
     caPath:
 ```
 
-Set `server.port` to choose the listening port. Set `server.basePath` to expose every router endpoint under a prefix, for example `/ollama-router`; then chat completions move to `/ollama-router/v1/chat/completions`, health to `/ollama-router/health`, and jobs to `/ollama-router/v1/jobs/{jobId}`.
+Set `server.nodeId` to a stable machine/runtime id when the router is used behind Kong. It is embedded in new async job ids so a gateway can route job status/result requests back to the right node-router. Allowed characters are letters, numbers, dots, and dashes. Set `server.port` to choose the listening port. Set `server.basePath` to expose every router endpoint under a prefix, for example `/ollama-router`; then chat completions move to `/ollama-router/v1/chat/completions`, health to `/ollama-router/health`, and jobs to `/ollama-router/v1/jobs/{jobId}`.
 
 To run HTTPS directly from the router, set `server.https.enabled: true` and provide PEM certificate and key paths:
 
 ```yaml
 server:
+  nodeId: gex44-a
   host: 0.0.0.0
   port: 11435
   basePath: /ollama-router
@@ -187,9 +189,60 @@ Status endpoints:
 curl http://127.0.0.1:11435/health
 curl http://127.0.0.1:11435/metrics
 curl http://127.0.0.1:11435/v1/router/status
+curl http://127.0.0.1:11435/v1/router/capabilities
+curl http://127.0.0.1:11435/v1/router/runtime
 curl http://127.0.0.1:11435/v1/router/models
 curl http://127.0.0.1:11435/v1/router/gpu
 ```
+
+## Kong Runtime Agent API
+
+When used with `kong-ollama-router`, this process acts as a local runtime agent. Kong owns public request validation, classification, model selection, and response enrichment. The node-router supplies machine-local state and executes the model selected by Kong.
+
+Kong-facing endpoints:
+
+```bash
+curl http://127.0.0.1:11435/v1/router/capabilities
+curl http://127.0.0.1:11435/v1/router/runtime
+curl -X POST http://127.0.0.1:11435/v1/router/execute
+curl -X POST http://127.0.0.1:11435/v1/router/jobs
+```
+
+`GET /v1/router/capabilities` returns the stable routing config snapshot: `nodeId`, package version, router defaults, GPU policy, queue defaults, configured models, and routes. It does not call Ollama or GPU probes, so Kong can cache it for longer periods.
+
+`GET /v1/router/runtime` returns volatile runtime state: Ollama reachability, loaded models, GPU snapshot, queue depth/running counts, and retained job counters. Kong should cache it only briefly.
+
+`POST /v1/router/execute` runs a request on a model already selected by Kong. It does not classify or route again:
+
+```json
+{
+  "selectedModel": "deepseek-coder:6.7b",
+  "request": {
+    "model": "deepseek-coder:6.7b",
+    "messages": [{"role": "user", "content": "Review this TypeScript function"}],
+    "stream": false
+  },
+  "routerDecision": {
+    "taskType": "code_review",
+    "score": 250,
+    "reason": "Selected by Kong"
+  }
+}
+```
+
+The response is wrapped so Kong can add its own public `router` metadata:
+
+```json
+{
+  "result": {},
+  "nodeId": "gex44-a",
+  "selectedModel": "deepseek-coder:6.7b",
+  "queueTimeMs": 4,
+  "executionTimeMs": 1200
+}
+```
+
+`POST /v1/router/jobs` creates an async job on the selected model. New job ids include the node id, for example `job_gex44-a_01JABCDEF123`, so Kong can route later `GET /v1/jobs/{jobId}` and `GET /v1/jobs/{jobId}/result` calls to the owning node-router.
 
 ## Async Jobs
 
@@ -197,7 +250,7 @@ When a selected model is busy or the router detects heavy load and `allowAsync=t
 
 ```json
 {
-  "id": "job_01JABCDEF123",
+  "id": "job_gex44-a_01JABCDEF123",
   "object": "router.job",
   "status": "queued",
   "message": "Heavy load. Job accepted for asynchronous processing."
@@ -322,6 +375,7 @@ The project uses TypeScript, ESM, Express, zod, pino, p-queue, nanoid, and Vites
 Design notes:
 
 - CLI configuration wizard HLD: `docs/cli-configurator-hld.md`
+- Kong runtime agent contract plan: `docs/kong-runtime-contract-plan.md`
 
 ## Release Guide
 

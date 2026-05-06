@@ -11,6 +11,7 @@ import { createApp } from '../src/server.js';
 export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const base: AppConfig = {
     server: {
+      nodeId: 'test-node',
       host: '127.0.0.1',
       port: 0,
       basePath: '/',
@@ -149,10 +150,24 @@ export class MockOllamaClient implements OllamaClient {
   async ps(): Promise<LoadedModel[]> {
     return this.loadedModels;
   }
+
+  async health(): Promise<boolean> {
+    return !this.fail;
+  }
 }
 
 export class MockGpuMonitor implements GpuMonitor {
-  constructor(public gpu: GpuSnapshot | undefined = { name: 'Test GPU', vramTotalMb: 20480, vramUsedMb: 1000, vramFreeMb: 19000, utilizationPct: 10 }) {}
+  constructor(
+    public gpu: GpuSnapshot | undefined = {
+      provider: 'nvidia',
+      name: 'Test GPU',
+      vramTotalMb: 20480,
+      vramUsedMb: 1000,
+      vramFreeMb: 19000,
+      utilizationPct: 10,
+      snapshotAgeMs: 0
+    }
+  ) {}
 
   async snapshot(): Promise<GpuSnapshot | undefined> {
     return this.gpu;
@@ -162,7 +177,7 @@ export class MockGpuMonitor implements GpuMonitor {
 export function createTestRuntime(config = testConfig()) {
   const ollama = new MockOllamaClient();
   const gpu = new MockGpuMonitor();
-  const jobs = new InMemoryJobStore(config.jobs);
+  const jobs = new InMemoryJobStore(config.jobs, config.server.nodeId);
   const queue = new QueueManager(config, ollama, jobs);
   const app = createApp(config, { ollama, gpu, jobs, queue });
   return { app, ollama, gpu, jobs, queue, config };

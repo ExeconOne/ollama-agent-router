@@ -201,6 +201,7 @@ export function generateConfigFromDetection(detection: WizardDetection, answers:
 
   const config: AppConfig = {
     server: {
+      nodeId: 'local',
       host: '127.0.0.1',
       port: 11435,
       basePath: '/',

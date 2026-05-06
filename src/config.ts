@@ -26,6 +26,7 @@ export const modelSpecSchema = z.object({
 
 export const appConfigSchema = z.object({
   server: z.object({
+    nodeId: z.string().regex(/^[a-zA-Z0-9.-]+$/, 'server.nodeId may contain only letters, numbers, dots, and dashes').default('local'),
     host: z.string().min(1),
     port: z.number().int().min(1).max(65535),
     basePath: z.string().min(1).default('/'),
@@ -143,6 +144,7 @@ export async function writeDefaultConfig(path: string): Promise<void> {
 }
 
 export const defaultConfigYaml = `server:
+  nodeId: local
   host: 127.0.0.1
   port: 11435
   basePath: /

@@ -8,6 +8,7 @@ export interface OllamaClient {
   chat(request: ChatCompletionRequest, model: string, timeoutMs?: number): Promise<unknown>;
   tags(): Promise<unknown>;
   ps(): Promise<LoadedModel[]>;
+  health(): Promise<boolean>;
 }
 
 export class HttpOllamaClient implements OllamaClient {
@@ -54,6 +55,21 @@ export class HttpOllamaClient implements OllamaClient {
       return parseOllamaPs(stdout);
     } catch {
       return [];
+    }
+  }
+
+  async health(): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1000);
+    try {
+      const response = await fetch(new URL(`${this.config.nativeApiBasePath}/tags`, this.config.baseUrl), {
+        signal: controller.signal
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

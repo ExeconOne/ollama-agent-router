@@ -157,8 +157,95 @@ it('/health and /v1/router/status return useful state', async () => {
   const health = await requestJson(runtime.app, 'GET', '/health');
   const status = await requestJson(runtime.app, 'GET', '/v1/router/status');
   expect(health.body.status).toBe('ok');
+  expect(status.body.nodeId).toBe('test-node');
   expect(status.body.queue).toBeDefined();
   expect(status.body.config.models).toBe(4);
+  runtime.jobs.close();
+});
+
+it('/v1/router/capabilities returns Kong routing config snapshot', async () => {
+  const runtime = createTestRuntime();
+  const res = await requestJson(runtime.app, 'GET', '/v1/router/capabilities');
+  expect(res.status).toBe(200);
+  expect(res.body.nodeId).toBe('test-node');
+  expect(res.body.status).toBe('ok');
+  expect(res.body.version).toBeDefined();
+  expect(res.body.router.defaultMode).toBe('auto');
+  expect(res.body.gpu.vramSafetyReserveMb).toBe(runtime.config.gpu.vramSafetyReserveMb);
+  expect(res.body.queue.defaultPriority).toBe('normal');
+  expect(res.body.models).toHaveLength(4);
+  expect(res.body.routes.code_review).toContain('deepseek-coder:6.7b');
+  runtime.jobs.close();
+});
+
+it('/v1/router/runtime returns aggregated runtime snapshot', async () => {
+  const runtime = createTestRuntime();
+  runtime.ollama.loadedModels = [{ name: 'qwen2.5-coder:7b', processor: '100% GPU' }];
+  const job = runtime.queue.enqueueAsync({
+    model: runtime.config.models[0],
+    request: baseRequest('hello'),
+    classification: { taskType: 'simple_chat', complexity: 'light', requiresLargeContext: false, requiresToolUse: false, confidence: 1 },
+    priority: 50
+  });
+  await waitFor(() => runtime.jobs.get(job.id)?.status === 'succeeded');
+  const res = await requestJson(runtime.app, 'GET', '/v1/router/runtime');
+  expect(res.status).toBe(200);
+  expect(res.body.nodeId).toBe('test-node');
+  expect(res.body.status).toBe('ok');
+  expect(res.body.ollama).toMatchObject({ baseUrl: runtime.config.ollama.baseUrl, reachable: true });
+  expect(res.body.loadedModels).toEqual(runtime.ollama.loadedModels);
+  expect(res.body.gpu.provider).toBe('nvidia');
+  expect(res.body.queues.byModel).toHaveLength(4);
+  expect(res.body.jobs.succeededRetained).toBe(1);
+  runtime.jobs.close();
+});
+
+it('/v1/router/execute runs the selected model without rerouting', async () => {
+  const runtime = createTestRuntime();
+  const selectedModel = 'B-A-M-N/vibethinker:1.5b';
+  const res = await requestJson(runtime.app, 'POST', '/v1/router/execute', {
+    selectedModel,
+    request: baseRequest('Write a TypeScript function that would normally route to coder'),
+    routerDecision: { taskType: 'code_generate', score: 12, reason: 'test-selected' }
+  });
+  expect(res.status).toBe(200);
+  expect(res.body.nodeId).toBe('test-node');
+  expect(res.body.selectedModel).toBe(selectedModel);
+  expect(res.body.result.model).toBe(selectedModel);
+  expect(runtime.ollama.calls.at(-1)?.model).toBe(selectedModel);
+  runtime.jobs.close();
+});
+
+it('/v1/router/execute rejects stream and unknown selected models', async () => {
+  const runtime = createTestRuntime();
+  const stream = await requestJson(runtime.app, 'POST', '/v1/router/execute', {
+    selectedModel: runtime.config.models[0].name,
+    request: { ...baseRequest('hello'), stream: true }
+  });
+  const unknown = await requestJson(runtime.app, 'POST', '/v1/router/execute', {
+    selectedModel: 'missing:model',
+    request: baseRequest('hello')
+  });
+  expect(stream.status).toBe(400);
+  expect(unknown.status).toBe(404);
+  runtime.jobs.close();
+});
+
+it('/v1/router/jobs creates a selected-model async job with node-routable id', async () => {
+  const runtime = createTestRuntime();
+  const selectedModel = 'gpt-oss:20b';
+  const res = await requestJson(runtime.app, 'POST', '/v1/router/jobs', {
+    selectedModel,
+    request: baseRequest('Plan a debugging strategy'),
+    classification: { taskType: 'agentic_reasoning', complexity: 'heavy' },
+    priority: 'high',
+    routerDecision: { score: 100, reason: 'test-selected' }
+  });
+  expect(res.status).toBe(202);
+  expect(res.body.id).toMatch(/^job_test-node_/);
+  expect(res.body.nodeId).toBe('test-node');
+  expect(res.body.selectedModel).toBe(selectedModel);
+  expect(runtime.jobs.get(res.body.id)?.selected_model).toBe(selectedModel);
   runtime.jobs.close();
 });
 
@@ -166,8 +253,12 @@ it('mounts every endpoint under the configured base path', async () => {
   const runtime = createTestRuntime(testConfig({ server: { ...testConfig().server, basePath: '/ollama-router' } }));
   const health = await requestJson(runtime.app, 'GET', '/ollama-router/health');
   const status = await requestJson(runtime.app, 'GET', '/ollama-router/v1/router/status');
+  const capabilities = await requestJson(runtime.app, 'GET', '/ollama-router/v1/router/capabilities');
+  const runtimeSnapshot = await requestJson(runtime.app, 'GET', '/ollama-router/v1/router/runtime');
   expect(health.status).toBe(200);
   expect(status.body.config.basePath).toBe('/ollama-router');
+  expect(capabilities.status).toBe(200);
+  expect(runtimeSnapshot.status).toBe(200);
   runtime.jobs.close();
 });
 

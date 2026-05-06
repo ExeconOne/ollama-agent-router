@@ -16,6 +16,7 @@ export type RouterMode = 'auto' | 'sync' | 'async';
 export type PriorityName = 'low' | 'normal' | 'high';
 export type Complexity = 'light' | 'medium' | 'heavy';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
+export type NodeStatus = 'ok' | 'degraded' | 'unavailable';
 
 export interface RouterRequestMetadata {
   mode?: RouterMode;
@@ -46,11 +47,13 @@ export interface Classification {
 }
 
 export interface GpuSnapshot {
+  provider?: AppConfig['gpu']['provider'];
   name: string;
   vramTotalMb: number;
   vramUsedMb: number;
   vramFreeMb: number;
   utilizationPct: number;
+  snapshotAgeMs?: number;
 }
 
 export interface LoadedModel {
@@ -78,6 +81,7 @@ export interface ModelSpec {
 
 export interface AppConfig {
   server: {
+    nodeId: string;
     host: string;
     port: number;
     basePath: string;
@@ -135,6 +139,53 @@ export interface AppConfig {
     perUserMaxQueued: number;
     defaultPriority: PriorityName;
     timeoutMs: number;
+  };
+}
+
+export interface NodeCapabilities {
+  nodeId: string;
+  status: NodeStatus;
+  version: string;
+  router: AppConfig['router'];
+  gpu: {
+    requireGpuOnlyByDefault: boolean;
+    vramSafetyReserveMb: number;
+  };
+  queue: {
+    defaultPriority: PriorityName;
+    timeoutMs: number;
+  };
+  models: ModelSpec[];
+  routes: Partial<Record<TaskType | string, string[]>>;
+}
+
+export interface RuntimeSnapshot {
+  nodeId: string;
+  status: NodeStatus;
+  timestamp: string;
+  ollama: {
+    baseUrl: string;
+    reachable: boolean;
+  };
+  gpu?: GpuSnapshot;
+  loadedModels: LoadedModel[];
+  queues: {
+    globalQueued: number;
+    globalRunning: number;
+    byModel: Array<{
+      model: string;
+      queued: number;
+      running: number;
+      concurrency: number;
+    }>;
+  };
+  jobs: {
+    queued: number;
+    running: number;
+    succeededRetained: number;
+    failedRetained: number;
+    cancelledRetained: number;
+    expiredRetained: number;
   };
 }
 

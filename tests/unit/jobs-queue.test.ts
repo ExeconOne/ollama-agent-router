@@ -4,18 +4,22 @@ import { MockOllamaClient, testConfig } from '../helpers.js';
 
 it('keeps job lifecycle transitions in memory', () => {
   const config = testConfig();
-  const store = new InMemoryJobStore(config.jobs);
+  const store = new InMemoryJobStore(config.jobs, config.server.nodeId);
   const job = store.create({
     taskType: 'simple_chat',
     selectedModel: 'B-A-M-N/vibethinker:1.5b',
     request: { messages: [{ role: 'user', content: 'hi' }] },
     priority: 50
   });
+  expect(job.id).toMatch(/^job_test-node_/);
   expect(store.get(job.id)?.status).toBe('queued');
+  expect(store.summary()).toMatchObject({ queued: 1, running: 0 });
   store.markRunning(job.id);
   expect(store.get(job.id)?.status).toBe('running');
+  expect(store.summary()).toMatchObject({ queued: 0, running: 1 });
   store.markSucceeded(job.id, { ok: true });
   expect(parseJobResult(store.get(job.id)!)).toEqual({ ok: true });
+  expect(store.summary()).toMatchObject({ succeededRetained: 1 });
   store.close();
 });
 

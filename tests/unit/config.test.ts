@@ -27,3 +27,8 @@ it('requires cert and key paths when HTTPS is enabled', async () => {
   const raw = await readFile('examples/gex44.yaml', 'utf8');
   expect(() => parseConfig(raw.replace('enabled: false', 'enabled: true'))).toThrow(/certPath.*keyPath/);
 });
+
+it('rejects node ids that cannot be embedded in routed job ids', async () => {
+  const raw = await readFile('examples/gex44.yaml', 'utf8');
+  expect(() => parseConfig(raw.replace('host: 127.0.0.1', 'nodeId: bad_node\n  host: 127.0.0.1'))).toThrow(/nodeId/);
+});
