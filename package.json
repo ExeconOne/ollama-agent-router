@@ -1,6 +1,6 @@
 {
   "name": "ollama-agent-router",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Intelligent OpenAI-compatible router for Ollama with model selection, GPU/CPU-aware queues, async jobs, and CLI configuration.",
   "type": "module",
   "license": "MIT",
