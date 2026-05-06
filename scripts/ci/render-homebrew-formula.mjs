@@ -1,8 +1,19 @@
-class OllamaAgentRouter < Formula
+#!/usr/bin/env node
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+const [version, sha256, outputPath] = process.argv.slice(2);
+
+if (!version || !sha256 || !outputPath) {
+  console.error('Usage: render-homebrew-formula.mjs <version> <sha256> <output-path>');
+  process.exit(1);
+}
+
+const formula = `class OllamaAgentRouter < Formula
   desc "OpenAI-compatible router for Ollama with GPU/CPU-aware queues"
   homepage "https://github.com/ExeconOne/ollama-agent-router"
-  url "https://registry.npmjs.org/ollama-agent-router/-/ollama-agent-router-0.1.0.tgz"
-  sha256 "95c937a9c70e214bc8d2c09cc56f82cbaab53fa795142f20acbe3c771cca9d4e"
+  url "https://registry.npmjs.org/ollama-agent-router/-/ollama-agent-router-${version}.tgz"
+  sha256 "${sha256}"
   license "MIT"
 
   depends_on "node"
@@ -51,3 +62,7 @@ class OllamaAgentRouter < Formula
     assert_match "Usage: ollama-agent-router", shell_output("#{bin}/oar --help")
   end
 end
+`;
+
+mkdirSync(dirname(outputPath), { recursive: true });
+writeFileSync(outputPath, formula);

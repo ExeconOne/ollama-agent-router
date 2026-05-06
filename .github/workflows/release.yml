@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  PACKAGE_NAME: ollama-agent-router
+  HOMEBREW_TAP_REPOSITORY: ExeconOne/homebrew-tap
+
+jobs:
+  publish:
+    name: Publish npm, GitHub Release, and APT repo
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      npm_sha256: ${{ steps.npm_tarball.outputs.sha256 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Read release metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Tag version v$VERSION does not match package.json version $PACKAGE_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Resolve published npm tarball and SHA256
+        id: npm_tarball
+        shell: bash
+        run: |
+          mkdir -p artifacts/npm
+          # npm registry metadata can lag for a few seconds immediately after publish.
+          for attempt in 1 2 3 4 5; do
+            TARBALL_URL="$(npm view "$PACKAGE_NAME@${{ steps.meta.outputs.version }}" dist.tarball 2>/dev/null || true)"
+            if [ -n "$TARBALL_URL" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$TARBALL_URL" ]; then
+            echo "Could not resolve published npm tarball" >&2
+            exit 1
+          fi
+          curl -fsSL "$TARBALL_URL" -o "artifacts/npm/$PACKAGE_NAME-${{ steps.meta.outputs.version }}.tgz"
+          SHA256="$(sha256sum "artifacts/npm/$PACKAGE_NAME-${{ steps.meta.outputs.version }}.tgz" | awk '{print $1}')"
+          echo "tarball_url=$TARBALL_URL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare nFPM config
+        run: |
+          sed -i "s/^version:.*/version: ${{ steps.meta.outputs.version }}/" packaging/nfpm.yaml
+
+      - name: Prepare deb runtime dependencies
+        run: |
+          npm prune --omit=dev
+          node dist/cli.js --help >/dev/null
+
+      - name: Build deb package
+        uses: goreleaser/nfpm-action@v2
+        with:
+          config: packaging/nfpm.yaml
+          packager: deb
+
+      - name: Collect deb artifact
+        id: deb
+        shell: bash
+        run: |
+          mkdir -p artifacts/deb
+          DEB_PATH="$(find . -maxdepth 1 -name '*.deb' -print -quit)"
+          if [ -z "$DEB_PATH" ]; then
+            echo "No .deb artifact produced by nFPM" >&2
+            exit 1
+          fi
+          cp "$DEB_PATH" artifacts/deb/
+          echo "path=artifacts/deb/$(basename "$DEB_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Install APT repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gnupg
+
+      - name: Build APT repository for GitHub Pages
+        run: |
+          bash scripts/ci/build-apt-repo.sh "${{ steps.deb.outputs.path }}" public/apt stable main "amd64 arm64 armhf i386"
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy APT repository to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/npm/*.tgz
+            artifacts/deb/*.deb
+
+  update-homebrew-tap:
+    name: Update Homebrew tap
+    runs-on: ubuntu-latest
+    needs: publish
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMEBREW_TAP_REPOSITORY }}
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Render formula
+        run: |
+          node source/scripts/ci/render-homebrew-formula.mjs \
+            "${{ needs.publish.outputs.version }}" \
+            "${{ needs.publish.outputs.npm_sha256 }}" \
+            tap/Formula/ollama-agent-router.rb
+
+      - name: Commit formula update
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/ollama-agent-router.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git commit -m "Update ollama-agent-router to ${{ needs.publish.outputs.version }}"
+          git push

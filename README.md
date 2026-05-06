@@ -267,18 +267,29 @@ npm install -g ollama-agent-router
 ollama-agent-router init
 ```
 
-Homebrew formula template:
+Homebrew:
 
 ```bash
 brew install ExeconOne/tap/ollama-agent-router
 ```
 
-Debian package:
+Debian package from a release asset:
 
 ```bash
-npm run build
-npm run package:deb
-sudo apt install ./ollama-agent-router_0.1.0_amd64.deb
+sudo apt install ./ollama-agent-router_0.1.0_all.deb
+```
+
+APT repository from GitHub Pages:
+
+```bash
+curl -fsSL https://execonone.github.io/ollama-agent-router/apt/gpg.key \
+  | sudo gpg --dearmor -o /usr/share/keyrings/ollama-agent-router.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/ollama-agent-router.gpg] https://execonone.github.io/ollama-agent-router/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/ollama-agent-router.list
+
+sudo apt-get update
+sudo apt-get install ollama-agent-router
 ```
 
 ## Development
@@ -299,12 +310,43 @@ Design notes:
 
 ## Release Guide
 
-1. Update `package.json`, `packaging/nfpm.yaml`, and the Homebrew formula version.
-2. Run `npm run typecheck`, `npm test`, and `npm run build`.
-3. Verify `npm pack --dry-run`.
-4. Publish to npm.
-5. Build `.deb` with `npm run package:deb`.
-6. Replace the Homebrew formula URL and SHA256 with the npm tarball values.
+Releases are automated through GitHub Actions when pushing a version tag.
+
+Required repository secrets:
+
+- `NPM_TOKEN`: npm automation token with publish access.
+- `TAP_GITHUB_TOKEN`: GitHub token with write access to `ExeconOne/homebrew-tap`.
+- `APT_GPG_PRIVATE_KEY`: ASCII-armored private GPG key.
+- `APT_GPG_PASSPHRASE`: passphrase for that key, if any.
+
+GitHub Pages must be enabled with source set to GitHub Actions.
+The APT repository is always signed; releases fail if `APT_GPG_PRIVATE_KEY` is not configured.
+
+Release flow:
+
+```bash
+npm version patch
+git push origin main
+git push origin v0.1.1
+```
+
+The release workflow will:
+
+1. Run typecheck, tests, and build.
+2. Publish the package to npm.
+3. Prune dev dependencies and build the `.deb` package with nFPM.
+4. Create a GitHub Release with npm tarball and `.deb` assets.
+5. Publish a signed APT repository under GitHub Pages at `/apt`.
+6. Update `Formula/ollama-agent-router.rb` in `ExeconOne/homebrew-tap`.
+
+Local dry-run before tagging:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm publish --dry-run
+```
 
 ## Safety Notes
 

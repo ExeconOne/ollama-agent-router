@@ -1,5 +1,5 @@
 name: ollama-agent-router
-arch: amd64
+arch: all
 platform: linux
 version: 0.1.0
 section: utils
@@ -11,6 +11,16 @@ homepage: https://github.com/ExeconOne/ollama-agent-router
 contents:
   - src: ./dist
     dst: /usr/lib/ollama-agent-router/dist
+  - src: ./node_modules
+    dst: /usr/lib/ollama-agent-router/node_modules
+  - src: ./package.json
+    dst: /usr/lib/ollama-agent-router/package.json
+  - src: /usr/lib/ollama-agent-router/dist/cli.js
+    dst: /usr/bin/ollama-agent-router
+    type: symlink
+  - src: /usr/lib/ollama-agent-router/dist/cli.js
+    dst: /usr/bin/oar
+    type: symlink
   - src: ./examples/gex44.yaml
     dst: /usr/share/ollama-agent-router/examples/gex44.yaml
   - src: ./packaging/systemd/ollama-agent-router.service
