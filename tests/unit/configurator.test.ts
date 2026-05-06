@@ -8,6 +8,8 @@ import {
 } from '../../src/configurator.js';
 import { parseConfig } from '../../src/config.js';
 import { readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 it('parses ollama list output with model sizes', () => {
   const models = parseOllamaList(`NAME                       ID              SIZE      MODIFIED
@@ -131,8 +133,9 @@ it('honors OLLAMA_HOST during detection', async () => {
 });
 
 it('generates valid YAML in non-interactive mode from answers', async () => {
-  const outputPath = '/private/tmp/oar-configurator-test.yaml';
-  const answersPath = '/private/tmp/oar-configurator-answers.yaml';
+  const testId = `${process.pid}-${Date.now()}`;
+  const outputPath = join(tmpdir(), `oar-configurator-test-${testId}.yaml`);
+  const answersPath = join(tmpdir(), `oar-configurator-answers-${testId}.yaml`);
   await writeFile(
     answersPath,
     `models:
