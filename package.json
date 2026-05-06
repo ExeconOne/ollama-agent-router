@@ -55,7 +55,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "start": "node dist/cli.js serve",
-    "package:deb": "npm run build && npm prune --omit=dev && nfpm package --config packaging/nfpm.yaml --packager deb",
+    "package:deb": "npm run build && npm prune --omit=dev && nfpm pkg --config packaging/nfpm.yaml --packager deb --target .",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

@@ -129,11 +129,17 @@ jobs:
           npm prune --omit=dev
           node dist/cli.js --help >/dev/null
 
-      - name: Build deb package
-        uses: goreleaser/nfpm-action@v2
+      - name: Setup Go for nFPM
+        uses: actions/setup-go@v5
         with:
-          config: packaging/nfpm.yaml
-          packager: deb
+          go-version: stable
+
+      - name: Install nFPM
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.4
+
+      - name: Build deb package
+        run: |
+          "$(go env GOPATH)/bin/nfpm" pkg --config packaging/nfpm.yaml --packager deb --target .
 
       - name: Collect deb artifact
         id: deb
