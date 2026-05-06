@@ -1,8 +1,8 @@
 class OllamaAgentRouter < Formula
   desc "OpenAI-compatible router for Ollama with GPU/CPU-aware queues"
   homepage "https://github.com/ExeconOne/ollama-agent-router"
-  url "https://registry.npmjs.org/ollama-agent-router/-/ollama-agent-router-0.1.0.tgz"
-  sha256 "9de0db60829bdf6e067f7f39f70b9a4588c012a0119fbd067f196a641e0e6090"
+  url "https://registry.npmjs.org/ollama-agent-router/-/ollama-agent-router-0.1.3.tgz"
+  sha256 "176008480991eba25b10b27bfc4ae753cacbdacbd7d680627dafc99e81324b1a"
   license "MIT"
 
   depends_on "node"
@@ -13,8 +13,8 @@ class OllamaAgentRouter < Formula
     bin.install_symlink libexec/"bin/ollama-agent-router"
     bin.install_symlink libexec/"bin/oar"
 
-    pkgshare.install "examples"
     (etc/"ollama-agent-router").install "examples/gex44.yaml" => "gex44.example.yaml"
+    pkgshare.install "examples"
   end
 
   def post_install

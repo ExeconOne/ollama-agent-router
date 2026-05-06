@@ -24,8 +24,8 @@ const formula = `class OllamaAgentRouter < Formula
     bin.install_symlink libexec/"bin/ollama-agent-router"
     bin.install_symlink libexec/"bin/oar"
 
-    pkgshare.install "examples"
     (etc/"ollama-agent-router").install "examples/gex44.yaml" => "gex44.example.yaml"
+    pkgshare.install "examples"
   end
 
   def post_install
