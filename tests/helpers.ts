@@ -7,6 +7,7 @@ import { GpuMonitor } from '../src/gpu.js';
 import { InMemoryJobStore } from '../src/job-store.js';
 import { QueueManager } from '../src/queue-manager.js';
 import { createApp } from '../src/server.js';
+import { adminPlaneConfigSchema, defaultManagedAccessConfig } from '../src/access-config.js';
 
 export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const base: AppConfig = {
@@ -17,6 +18,11 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       basePath: '/',
       requestBodyLimit: '2mb',
       https: { enabled: false }
+    },
+    access: {
+      bootstrapIfMissing: true,
+      managed: defaultManagedAccessConfig,
+      admin: adminPlaneConfigSchema.parse({})
     },
     ollama: {
       baseUrl: 'http://127.0.0.1:11434',
@@ -183,12 +189,20 @@ export function createTestRuntime(config = testConfig()) {
   return { app, ollama, gpu, jobs, queue, config };
 }
 
-export async function requestJson(app: ReturnType<typeof createApp>, method: string, path: string, body?: unknown) {
+export async function requestJson(
+  app: ReturnType<typeof createApp>,
+  method: string,
+  path: string,
+  body?: unknown,
+  options: { headers?: Record<string, string>; remoteAddress?: string } = {}
+) {
   const req = createRequest<Request>({
     method: method as 'GET' | 'POST' | 'DELETE',
     url: path,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
-    body: body as Record<string, unknown> | undefined
+    headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(options.headers ?? {}) },
+    body: body as Record<string, unknown> | undefined,
+    connection: { remoteAddress: options.remoteAddress ?? '127.0.0.1' },
+    socket: { remoteAddress: options.remoteAddress ?? '127.0.0.1' }
   });
   const res = createResponse<Response>({ eventEmitter: EventEmitter });
   await new Promise<void>((resolve, reject) => {

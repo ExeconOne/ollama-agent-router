@@ -13,6 +13,8 @@ import { RoutingEngine, normalizeRouterMetadata, priorityWeights } from './route
 import { QueueManager } from './queue-manager.js';
 import { InMemoryJobStore, parseJobError, parseJobResult } from './job-store.js';
 import { logger } from './logger.js';
+import { AccessControlStore, auditAdmin, getAccessErrorStatus } from './access-control.js';
+import { managedAccessConfigSchema } from './access-config.js';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -77,12 +79,18 @@ export interface ServerDependencies {
   gpu: GpuMonitor;
   jobs: InMemoryJobStore;
   queue: QueueManager;
+  access?: AccessControlStore;
 }
 
 export function createApp(config: AppConfig, deps: ServerDependencies): express.Express {
   const app = express();
   const api = express.Router();
   const routing = new RoutingEngine(config);
+  const access = deps.access ?? new AccessControlStore(config.access);
+  const standaloneAccess = access.publicMiddleware('standalone');
+  const runtimeAgentAccess = access.publicMiddleware('runtimeAgent');
+  const sharedJobAccess = access.publicMiddleware(['standalone', 'runtimeAgent']);
+  const adminAccess = access.adminMiddleware();
 
   if (process.env.NODE_ENV !== 'test') {
     app.use(pinoHttp({ logger }));
@@ -127,11 +135,33 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     );
   });
 
-  api.get('/v1/router/capabilities', (_req, res) => {
+  api.get('/v1/admin/access/config', adminAccess, (req, res) => {
+    auditAdmin(config.access.admin, req, 'success', 'config_read', res.locals.admin?.remoteIp);
+    res.json(access.getConfig());
+  });
+
+  api.put('/v1/admin/access/config', adminAccess, async (req, res, next) => {
+    try {
+      const payload = z
+        .object({
+          expectedVersion: z.number().int().nonnegative().optional(),
+          config: managedAccessConfigSchema
+        })
+        .parse(req.body);
+      const updated = await access.replaceConfig(payload.config, payload.expectedVersion);
+      auditAdmin(config.access.admin, req, 'success', 'config_updated', res.locals.admin?.remoteIp);
+      res.json(updated);
+    } catch (error) {
+      auditAdmin(config.access.admin, req, 'failure', error instanceof Error ? error.message : String(error), res.locals.admin?.remoteIp);
+      next(error);
+    }
+  });
+
+  api.get('/v1/router/capabilities', runtimeAgentAccess, (_req, res) => {
     res.json(buildCapabilities(config));
   });
 
-  api.get('/v1/router/runtime', async (_req, res, next) => {
+  api.get('/v1/router/runtime', runtimeAgentAccess, async (_req, res, next) => {
     try {
       res.json(await buildRuntimeSnapshot(config, deps));
     } catch (error) {
@@ -139,7 +169,7 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
-  api.get('/v1/router/status', async (_req, res, next) => {
+  api.get('/v1/router/status', runtimeAgentAccess, async (_req, res, next) => {
     try {
       res.json({
         nodeId: config.server.nodeId,
@@ -159,7 +189,7 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
-  api.get('/v1/router/models', async (_req, res, next) => {
+  api.get('/v1/router/models', runtimeAgentAccess, async (_req, res, next) => {
     try {
       res.json({
         configured: config.models,
@@ -171,7 +201,7 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
-  api.get('/v1/router/gpu', async (_req, res, next) => {
+  api.get('/v1/router/gpu', runtimeAgentAccess, async (_req, res, next) => {
     try {
       res.json((await safeGpu(deps.gpu)) ?? { provider: config.gpu.provider, available: false });
     } catch (error) {
@@ -179,17 +209,17 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
-  api.get('/v1/jobs', (_req, res) => {
+  api.get('/v1/jobs', sharedJobAccess, (_req, res) => {
     res.json({ jobs: deps.jobs.list() });
   });
 
-  api.get('/v1/jobs/:jobId', (req, res) => {
+  api.get('/v1/jobs/:jobId', sharedJobAccess, (req, res) => {
     const job = deps.jobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: { message: 'Job not found' } });
     return res.json(job);
   });
 
-  api.get('/v1/jobs/:jobId/result', (req, res) => {
+  api.get('/v1/jobs/:jobId/result', sharedJobAccess, (req, res) => {
     const job = deps.jobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: { message: 'Job not found' } });
     if (job.status === 'failed') return res.status(500).json({ status: job.status, error: parseJobError(job) });
@@ -197,13 +227,13 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     return res.json(parseJobResult(job));
   });
 
-  api.delete('/v1/jobs/:jobId', (req, res) => {
+  api.delete('/v1/jobs/:jobId', sharedJobAccess, (req, res) => {
     const job = deps.jobs.cancel(req.params.jobId);
     if (!job) return res.status(404).json({ error: { message: 'Job not found' } });
     return res.json(job);
   });
 
-  api.post('/v1/router/execute', async (req, res, next) => {
+  api.post('/v1/router/execute', runtimeAgentAccess, async (req, res, next) => {
     try {
       const payload = executeRequestSchema.parse(req.body);
       if (payload.request.stream) {
@@ -233,7 +263,7 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
-  api.post('/v1/router/jobs', (req, res, next) => {
+  api.post('/v1/router/jobs', runtimeAgentAccess, (req, res, next) => {
     try {
       const payload = createRouterJobSchema.parse(req.body);
       if (payload.request.stream) {
@@ -264,7 +294,7 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
-  api.post('/v1/chat/completions', async (req, res, next) => {
+  api.post('/v1/chat/completions', standaloneAccess, async (req, res, next) => {
     try {
       const request = chatRequestSchema.parse(req.body) as ChatCompletionRequest;
       if (request.stream) {
@@ -338,7 +368,7 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = error instanceof Error ? error.message : String(error);
-    const status = error instanceof z.ZodError ? 400 : error instanceof OllamaHttpError ? 502 : 500;
+    const status = getAccessErrorStatus(error) ?? (error instanceof z.ZodError ? 400 : error instanceof OllamaHttpError ? 502 : 500);
     res.status(status).json({ error: { message } });
   });
 
@@ -452,7 +482,9 @@ async function createHttpServer(config: AppConfig, app: express.Express): Promis
     {
       cert: await readFile(config.server.https.certPath),
       key: await readFile(config.server.https.keyPath),
-      ca: config.server.https.caPath ? await readFile(config.server.https.caPath) : undefined
+      ca: config.server.https.caPath ? await readFile(config.server.https.caPath) : undefined,
+      requestCert: Boolean(config.server.https.caPath && config.access.admin.clientCert.required),
+      rejectUnauthorized: false
     },
     app
   );

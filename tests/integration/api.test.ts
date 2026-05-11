@@ -1,5 +1,10 @@
 import { requestJson, createTestRuntime, testConfig } from '../helpers.js';
 import { priorityWeights } from '../../src/router-engine.js';
+import { hashApiKey } from '../../src/access-control.js';
+import { defaultManagedAccessConfig, loadManagedAccessConfig } from '../../src/access-config.js';
+import { readFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const baseRequest = (content: string, router: Record<string, unknown> = {}) => ({
   model: 'auto',
@@ -259,6 +264,182 @@ it('mounts every endpoint under the configured base path', async () => {
   expect(status.body.config.basePath).toBe('/ollama-router');
   expect(capabilities.status).toBe(200);
   expect(runtimeSnapshot.status).toBe(200);
+  runtime.jobs.close();
+});
+
+it('keeps standalone and runtime planes open by default for backwards compatibility', async () => {
+  const runtime = createTestRuntime();
+  const chat = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello there'));
+  const status = await requestJson(runtime.app, 'GET', '/v1/router/status');
+  expect(chat.status).toBe(200);
+  expect(status.status).toBe(200);
+  runtime.jobs.close();
+});
+
+it('requires scoped API keys independently for standalone and runtime planes', async () => {
+  const runtime = createTestRuntime(
+    testConfig({
+      access: {
+        bootstrapIfMissing: true,
+        managed: {
+          ...defaultManagedAccessConfig,
+          planes: {
+            standalone: { enabled: true, auth: { requireApiKey: true, anonymous: 'reject' } },
+            runtimeAgent: { enabled: true, auth: { requireApiKey: true, anonymous: 'reject' } }
+          },
+          apiKeys: [
+            { id: 'standalone-client', keyHash: hashApiKey('standalone-secret'), enabled: true, scopes: ['standalone'] },
+            { id: 'runtime-client', keyHash: hashApiKey('runtime-secret'), enabled: true, scopes: ['runtimeAgent'] }
+          ]
+        },
+        admin: { enabled: false, allowedIps: ['127.0.0.1'], trustedProxy: false, apiKeyHashes: [], clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] }, auditLog: true }
+      }
+    })
+  );
+  const missing = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'));
+  const wrongScope = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), {
+    headers: { authorization: 'Bearer runtime-secret' }
+  });
+  const okStandalone = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), {
+    headers: { authorization: 'Bearer standalone-secret' }
+  });
+  const okRuntime = await requestJson(runtime.app, 'GET', '/v1/router/status', undefined, {
+    headers: { authorization: 'Bearer runtime-secret' }
+  });
+  expect(missing.status).toBe(401);
+  expect(wrongScope.status).toBe(403);
+  expect(okStandalone.status).toBe(200);
+  expect(okRuntime.status).toBe(200);
+  runtime.jobs.close();
+});
+
+it('can disable the runtime agent plane independently', async () => {
+  const runtime = createTestRuntime(
+    testConfig({
+      access: {
+        bootstrapIfMissing: true,
+        managed: {
+          ...defaultManagedAccessConfig,
+          planes: {
+            standalone: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } },
+            runtimeAgent: { enabled: false, auth: { requireApiKey: false, anonymous: 'allow' } }
+          },
+          apiKeys: []
+        },
+        admin: { enabled: false, allowedIps: ['127.0.0.1'], trustedProxy: false, apiKeyHashes: [], clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] }, auditLog: true }
+      }
+    })
+  );
+  const chat = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'));
+  const status = await requestJson(runtime.app, 'GET', '/v1/router/status');
+  expect(chat.status).toBe(200);
+  expect(status.status).toBe(404);
+  runtime.jobs.close();
+});
+
+it('rate limits per API key and plane', async () => {
+  const runtime = createTestRuntime(
+    testConfig({
+      access: {
+        bootstrapIfMissing: true,
+        managed: {
+          ...defaultManagedAccessConfig,
+          planes: {
+            standalone: { enabled: true, auth: { requireApiKey: true, anonymous: 'reject' }, defaultLimit: { requests: 1, windowSeconds: 60 } },
+            runtimeAgent: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } }
+          },
+          apiKeys: [{ id: 'limited', keyHash: hashApiKey('limited-secret'), enabled: true, scopes: ['standalone'] }]
+        },
+        admin: { enabled: false, allowedIps: ['127.0.0.1'], trustedProxy: false, apiKeyHashes: [], clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] }, auditLog: true }
+      }
+    })
+  );
+  const headers = { authorization: 'Bearer limited-secret' };
+  const first = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), { headers });
+  const second = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), { headers });
+  expect(first.status).toBe(200);
+  expect(second.status).toBe(429);
+  runtime.jobs.close();
+});
+
+it('admin plane persists access config updates and reloads them from disk', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const managedConfigPath = join(dir, 'access.yaml');
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath,
+      managed: defaultManagedAccessConfig,
+      admin: {
+        enabled: true,
+        allowedIps: ['127.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+  const nextConfig = {
+    ...defaultManagedAccessConfig,
+    planes: {
+      standalone: { enabled: false, auth: { requireApiKey: true, anonymous: 'reject' } },
+      runtimeAgent: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } }
+    },
+    apiKeys: []
+  };
+  const res = await requestJson(
+    runtime.app,
+    'PUT',
+    '/v1/admin/access/config',
+    { expectedVersion: 1, config: nextConfig },
+    { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' }
+  );
+  const file = await readFile(managedConfigPath, 'utf8');
+  const reloaded = await loadManagedAccessConfig({ ...config.access, managed: defaultManagedAccessConfig }, dir);
+  expect(res.status).toBe(200);
+  expect(res.body.version).toBe(2);
+  expect(file).toContain('version: 2');
+  expect(reloaded.managed.planes.standalone.enabled).toBe(false);
+  runtime.jobs.close();
+});
+
+it('admin plane enforces IP allowlist and expected config version', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath: join(dir, 'access.yaml'),
+      managed: defaultManagedAccessConfig,
+      admin: {
+        enabled: true,
+        allowedIps: ['10.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+  const denied = await requestJson(
+    runtime.app,
+    'GET',
+    '/v1/admin/access/config',
+    undefined,
+    { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' }
+  );
+  runtime.config.access.admin.allowedIps = ['127.0.0.1'];
+  const conflict = await requestJson(
+    runtime.app,
+    'PUT',
+    '/v1/admin/access/config',
+    { expectedVersion: 99, config: defaultManagedAccessConfig },
+    { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' }
+  );
+  expect(denied.status).toBe(403);
+  expect(conflict.status).toBe(409);
   runtime.jobs.close();
 });
 

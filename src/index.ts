@@ -1,4 +1,6 @@
 export * from './classifier.js';
+export * from './access-config.js';
+export * from './access-control.js';
 export * from './config.js';
 export * from './configurator.js';
 export * from './gpu.js';

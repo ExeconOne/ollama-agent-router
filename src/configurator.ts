@@ -9,6 +9,7 @@ import os from 'node:os';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { parseConfig } from './config.js';
+import { adminPlaneConfigSchema, defaultManagedAccessConfig } from './access-config.js';
 import { parseNvidiaSmi } from './gpu.js';
 import { parseOllamaPs } from './ollama.js';
 import { AppConfig, LoadedModel, ModelSpec, TaskType } from './types.js';
@@ -208,6 +209,11 @@ export function generateConfigFromDetection(detection: WizardDetection, answers:
       requestBodyLimit: '8mb',
       https: serverHttps,
       ...omit(answers.server ?? {}, ['https'])
+    },
+    access: {
+      bootstrapIfMissing: true,
+      managed: defaultManagedAccessConfig,
+      admin: adminPlaneConfigSchema.parse({})
     },
     ollama: {
       baseUrl: detection.ollamaBaseUrl.value ?? 'http://127.0.0.1:11434',

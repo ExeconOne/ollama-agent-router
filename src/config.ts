@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { AppConfig, taskTypes } from './types.js';
+import { accessConfigSchema, loadManagedAccessConfig } from './access-config.js';
 
 const taskTypeSchema = z.enum(taskTypes);
 const optionalStringSchema = z.preprocess((value) => (value === null ? undefined : value), z.string().min(1).optional());
@@ -40,6 +41,7 @@ export const appConfigSchema = z.object({
       })
       .default({ enabled: false })
   }),
+  access: accessConfigSchema,
   ollama: z.object({
     baseUrl: z.string().url(),
     openAiCompatiblePath: z.string().min(1).default('/v1/chat/completions'),
@@ -114,7 +116,9 @@ export async function findConfigPath(explicitPath?: string): Promise<string> {
 export async function loadConfig(explicitPath?: string): Promise<{ path: string; config: AppConfig }> {
   const path = await findConfigPath(explicitPath);
   const raw = await readFile(path, 'utf8');
-  return { path, config: parseConfig(raw) };
+  const config = parseConfig(raw);
+  config.access = await loadManagedAccessConfig(config.access, dirname(path));
+  return { path, config };
 }
 
 export function parseConfig(raw: string): AppConfig {
@@ -122,6 +126,15 @@ export function parseConfig(raw: string): AppConfig {
   const config = appConfigSchema.parse(parsed) as AppConfig;
   if (config.server.https.enabled && (!config.server.https.certPath || !config.server.https.keyPath)) {
     throw new Error('server.https.certPath and server.https.keyPath are required when HTTPS is enabled');
+  }
+  if (config.access.admin.enabled && !config.access.managedConfigPath) {
+    throw new Error('access.managedConfigPath is required when access.admin.enabled is true');
+  }
+  if (config.access.admin.enabled && config.access.admin.apiKeyHashes.length === 0) {
+    throw new Error('access.admin.apiKeyHashes must contain at least one hash when access.admin.enabled is true');
+  }
+  if (config.access.admin.enabled && config.access.admin.clientCert.required && (!config.server.https.enabled || !config.server.https.caPath)) {
+    throw new Error('server.https.enabled and server.https.caPath are required when access.admin.clientCert.required is true');
   }
   const modelNames = new Set(config.models.map((model) => model.name));
   const missingRoutes = Object.entries(config.routes)
@@ -154,6 +167,33 @@ export const defaultConfigYaml = `server:
     certPath:
     keyPath:
     caPath:
+access:
+  bootstrapIfMissing: true
+  managedConfigPath:
+  admin:
+    enabled: false
+    allowedIps: [127.0.0.1, "::1"]
+    trustedProxy: false
+    apiKeyHashes: []
+    clientCert:
+      required: false
+      allowedFingerprints: []
+      allowedSubjects: []
+    auditLog: true
+  managed:
+    version: 1
+    planes:
+      standalone:
+        enabled: true
+        auth:
+          requireApiKey: false
+          anonymous: allow
+      runtimeAgent:
+        enabled: true
+        auth:
+          requireApiKey: false
+          anonymous: allow
+    apiKeys: []
 ollama:
   baseUrl: http://127.0.0.1:11434
   openAiCompatiblePath: /v1/chat/completions

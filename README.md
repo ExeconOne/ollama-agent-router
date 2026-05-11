@@ -1,8 +1,17 @@
 # ollama-agent-router
 
-`ollama-agent-router` is a local HTTP and CLI gateway for Ollama. It exposes an OpenAI-compatible chat completion endpoint and routes each request to the best configured local model based on task type, queue depth, loaded model state, GPU/VRAM headroom, priority, and sync/async policy.
+Ollama Agent Router is a local LLM router for Ollama. It provides an OpenAI-compatible API gateway that routes agent and chat requests to the best local Ollama model based on task type, GPU/VRAM headroom, queue depth, loaded model state, and sync/async policy.
 
 It is designed for machines that run several Ollama models with different strengths, for example a small triage model, one or more code models, and a larger exclusive reasoning model.
+
+## Why use Ollama Agent Router?
+
+Use `ollama-agent-router` when you need:
+
+- an Ollama router for multiple local models
+- an Ollama agent router for coding agents and autonomous workflows
+- an OpenAI-compatible local LLM router
+- GPU-aware routing, queues, async jobs, and model selection
 
 ## Architecture
 
@@ -97,6 +106,7 @@ Lookup order:
 Top-level sections:
 
 - `server`: host, port, base path, HTTPS certificates, and JSON body limit.
+- `access`: optional access control for standalone, runtime-agent, and admin planes.
 - `ollama`: base URL, OpenAI-compatible path, native API path, keep-alive, timeout.
 - `gpu`: provider, VRAM limits, GPU-only default, NVIDIA monitor command.
 - `router`: default mode, heavy-load thresholds, classifier config.
@@ -145,6 +155,143 @@ server:
     keyPath: /etc/ollama-agent-router/tls.key
     caPath:
 ```
+
+## Access Planes
+
+The router can expose three separate access planes:
+
+- **Standalone plane**: the full local OpenAI-compatible router API, including `POST /v1/chat/completions` and job endpoints.
+- **Runtime agent plane**: machine-local endpoints used by Kong or another gateway, including `/v1/router/*` and selected-model execution.
+- **Admin plane**: access-management endpoints under `/v1/admin/access/*`.
+
+Access control is backward-compatible. If `access` is not configured, the standalone and runtime-agent planes stay enabled without API key requirements, matching earlier releases. The admin plane is disabled by default.
+
+API keys are sent with:
+
+```text
+Authorization: Bearer <api-key>
+```
+
+`x-api-key` is also accepted for clients that cannot set bearer tokens.
+
+Create SHA-256 key hashes before putting keys in config:
+
+```bash
+node -e "const crypto=require('crypto'); console.log('sha256:'+crypto.createHash('sha256').update(process.argv[1]).digest('hex'))" 'secret-value'
+```
+
+Example access configuration:
+
+```yaml
+access:
+  managedConfigPath: ./ollama-agent-router.access.yaml
+  bootstrapIfMissing: true
+
+  admin:
+    enabled: true
+    allowedIps: [127.0.0.1, "::1", 10.0.0.0/8]
+    trustedProxy: false
+    apiKeyHashes:
+      - sha256:replace-with-admin-key-hash
+    clientCert:
+      required: false
+      allowedFingerprints: []
+      allowedSubjects: []
+    auditLog: true
+
+  managed:
+    version: 1
+    planes:
+      standalone:
+        enabled: true
+        auth:
+          requireApiKey: true
+          anonymous: reject
+        defaultLimit:
+          requests: 60
+          windowSeconds: 60
+      runtimeAgent:
+        enabled: true
+        auth:
+          requireApiKey: true
+          anonymous: reject
+        defaultLimit:
+          requests: 600
+          windowSeconds: 60
+    apiKeys:
+      - id: local-client
+        name: Local standalone client
+        keyHash: sha256:replace-with-client-key-hash
+        enabled: true
+        scopes: [standalone]
+        limits:
+          standalone:
+            requests: 120
+            windowSeconds: 60
+      - id: kong-runtime
+        name: Kong runtime caller
+        keyHash: sha256:replace-with-kong-key-hash
+        enabled: true
+        scopes: [runtimeAgent]
+        limits:
+          runtimeAgent:
+            requests: 2000
+            windowSeconds: 60
+```
+
+`access.managed` is the initial access policy. When `access.managedConfigPath` is set, the router loads that file at startup. If the file is missing and `bootstrapIfMissing: true`, it writes the initial policy to that path. Admin API changes are then written atomically to this managed YAML file and survive restarts.
+
+The admin plane security settings are boot-only. They are intentionally not managed through the admin API:
+
+- `access.admin.allowedIps`
+- `access.admin.trustedProxy`
+- `access.admin.apiKeyHashes`
+- `access.admin.clientCert`
+
+This prevents the admin API from changing the rules that protect itself. When `access.admin.enabled: true`, `access.managedConfigPath` and at least one admin API key hash are required.
+
+Admin API:
+
+```bash
+curl http://127.0.0.1:11435/v1/admin/access/config \
+  -H 'authorization: Bearer admin-secret'
+
+curl -X PUT http://127.0.0.1:11435/v1/admin/access/config \
+  -H 'authorization: Bearer admin-secret' \
+  -H 'content-type: application/json' \
+  -d '{
+    "expectedVersion": 1,
+    "config": {
+      "version": 1,
+      "planes": {
+        "standalone": {
+          "enabled": true,
+          "auth": {"requireApiKey": true, "anonymous": "reject"},
+          "defaultLimit": {"requests": 60, "windowSeconds": 60}
+        },
+        "runtimeAgent": {
+          "enabled": true,
+          "auth": {"requireApiKey": true, "anonymous": "reject"},
+          "defaultLimit": {"requests": 600, "windowSeconds": 60}
+        }
+      },
+      "apiKeys": []
+    }
+  }'
+```
+
+The admin `PUT` supports optimistic concurrency. If `expectedVersion` is present and does not match the active managed access config, the router returns `409`.
+
+For admin client certificate checks, enable HTTPS, configure `server.https.caPath`, and set:
+
+```yaml
+access:
+  admin:
+    clientCert:
+      required: true
+```
+
+The HTTPS server requests a client certificate and the admin middleware verifies that it is trusted. Optional fingerprint and subject allowlists can narrow trust further.
 
 ## API Examples
 
@@ -197,7 +344,7 @@ curl http://127.0.0.1:11435/v1/router/gpu
 
 ## Kong Runtime Agent API
 
-When used with `kong-ollama-agent-router`, this process acts as a local runtime agent. Kong owns public request validation, classification, model selection, and response enrichment. The node-router supplies machine-local state and executes the model selected by Kong.
+When used with [`kong-ollama-agent-router`](https://github.com/ExeconOne/kong-ollama-agent-router), this process acts as a local runtime agent. Kong owns public request validation, classification, model selection, and response enrichment. The node-router supplies machine-local state and executes the model selected by Kong.
 
 Kong-facing endpoints:
 

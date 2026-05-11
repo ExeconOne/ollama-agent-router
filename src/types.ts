@@ -17,6 +17,58 @@ export type PriorityName = 'low' | 'normal' | 'high';
 export type Complexity = 'light' | 'medium' | 'heavy';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired';
 export type NodeStatus = 'ok' | 'degraded' | 'unavailable';
+export type AccessPlane = 'standalone' | 'runtimeAgent';
+export type AnonymousAccessMode = 'allow' | 'reject' | 'limited';
+
+export interface TrafficLimit {
+  requests: number;
+  windowSeconds: number;
+}
+
+export interface ProtectedPlaneConfig {
+  enabled: boolean;
+  auth: {
+    requireApiKey: boolean;
+    anonymous: AnonymousAccessMode;
+  };
+  defaultLimit?: TrafficLimit;
+}
+
+export interface ApiKeyAccessConfig {
+  id: string;
+  name?: string;
+  keyHash: string;
+  enabled: boolean;
+  scopes: AccessPlane[];
+  limits?: Partial<Record<AccessPlane, TrafficLimit>>;
+}
+
+export interface ManagedAccessConfig {
+  version: number;
+  updatedAt?: string;
+  planes: Record<AccessPlane, ProtectedPlaneConfig>;
+  apiKeys: ApiKeyAccessConfig[];
+}
+
+export interface AdminPlaneConfig {
+  enabled: boolean;
+  allowedIps: string[];
+  trustedProxy: boolean;
+  apiKeyHashes: string[];
+  clientCert: {
+    required: boolean;
+    allowedFingerprints: string[];
+    allowedSubjects: string[];
+  };
+  auditLog: boolean;
+}
+
+export interface AccessConfig {
+  managedConfigPath?: string;
+  bootstrapIfMissing: boolean;
+  managed: ManagedAccessConfig;
+  admin: AdminPlaneConfig;
+}
 
 export interface RouterRequestMetadata {
   mode?: RouterMode;
@@ -93,6 +145,7 @@ export interface AppConfig {
       caPath?: string;
     };
   };
+  access: AccessConfig;
   ollama: {
     baseUrl: string;
     openAiCompatiblePath: string;
