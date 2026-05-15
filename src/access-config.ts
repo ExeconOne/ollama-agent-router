@@ -20,6 +20,20 @@ const protectedPlaneConfigSchema = z.object({
   defaultLimit: trafficLimitSchema.optional()
 });
 
+export const apiKeySchema = z.object({
+  id: z.string().min(1).regex(/^[a-zA-Z0-9._:-]+$/, 'api key id may contain only letters, numbers, dots, underscores, colons, and dashes'),
+  name: z.string().min(1).optional(),
+  keyHash: z.string().regex(/^sha256:[a-fA-F0-9]{64}$/, 'keyHash must use sha256:<64 hex chars>'),
+  enabled: z.boolean().default(true),
+  scopes: z.array(z.enum(['standalone', 'runtimeAgent'])).min(1),
+  limits: z
+    .object({
+      standalone: trafficLimitSchema.optional(),
+      runtimeAgent: trafficLimitSchema.optional()
+    })
+    .optional()
+});
+
 export const managedAccessConfigSchema = z.object({
   version: z.number().int().nonnegative().default(1),
   updatedAt: z.string().datetime().optional(),
@@ -38,23 +52,7 @@ export const managedAccessConfigSchema = z.object({
       standalone: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } },
       runtimeAgent: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } }
     }),
-  apiKeys: z
-    .array(
-      z.object({
-        id: z.string().min(1).regex(/^[a-zA-Z0-9._:-]+$/, 'api key id may contain only letters, numbers, dots, underscores, colons, and dashes'),
-        name: z.string().min(1).optional(),
-        keyHash: z.string().regex(/^sha256:[a-fA-F0-9]{64}$/, 'keyHash must use sha256:<64 hex chars>'),
-        enabled: z.boolean().default(true),
-        scopes: z.array(z.enum(['standalone', 'runtimeAgent'])).min(1),
-        limits: z
-          .object({
-            standalone: trafficLimitSchema.optional(),
-            runtimeAgent: trafficLimitSchema.optional()
-          })
-          .optional()
-      })
-    )
-    .default([])
+  apiKeys: z.array(apiKeySchema).default([])
 });
 
 export const defaultManagedAccessConfig: ManagedAccessConfig = managedAccessConfigSchema.parse({});

@@ -157,6 +157,28 @@ export function createApp(config: AppConfig, deps: ServerDependencies): express.
     }
   });
 
+  api.post('/v1/admin/access/keys', adminAccess, async (req, res, next) => {
+    try {
+      const key = await access.addApiKey(req.body);
+      auditAdmin(config.access.admin, req, 'success', 'key_added', res.locals.admin?.remoteIp, key.id);
+      res.status(201).json(key);
+    } catch (error) {
+      auditAdmin(config.access.admin, req, 'failure', error instanceof Error ? error.message : String(error), res.locals.admin?.remoteIp);
+      next(error);
+    }
+  });
+
+  api.delete('/v1/admin/access/keys/:id', adminAccess, async (req, res, next) => {
+    try {
+      const revoked = await access.revokeApiKey(req.params.id);
+      auditAdmin(config.access.admin, req, 'success', 'key_revoked', res.locals.admin?.remoteIp, revoked.id);
+      res.json({ revoked });
+    } catch (error) {
+      auditAdmin(config.access.admin, req, 'failure', error instanceof Error ? error.message : String(error), res.locals.admin?.remoteIp);
+      next(error);
+    }
+  });
+
   api.get('/v1/router/capabilities', runtimeAgentAccess, (_req, res) => {
     res.json(buildCapabilities(config));
   });

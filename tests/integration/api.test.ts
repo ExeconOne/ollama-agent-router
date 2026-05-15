@@ -443,6 +443,182 @@ it('admin plane enforces IP allowlist and expected config version', async () => 
   runtime.jobs.close();
 });
 
+it('POST /v1/admin/access/keys adds a key that becomes active immediately', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath: join(dir, 'access.yaml'),
+      managed: {
+        ...defaultManagedAccessConfig,
+        planes: {
+          standalone: { enabled: true, auth: { requireApiKey: true, anonymous: 'reject' } },
+          runtimeAgent: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } }
+        },
+        apiKeys: []
+      },
+      admin: {
+        enabled: true,
+        allowedIps: ['127.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+  const adminOpts = { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' };
+
+  const before = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), {
+    headers: { authorization: 'Bearer new-client-secret' }
+  });
+  expect(before.status).toBe(401);
+
+  const add = await requestJson(runtime.app, 'POST', '/v1/admin/access/keys', {
+    id: 'new-client',
+    name: 'New client',
+    keyHash: hashApiKey('new-client-secret'),
+    scopes: ['standalone']
+  }, adminOpts);
+  expect(add.status).toBe(201);
+  expect(add.body.id).toBe('new-client');
+  expect(add.body.enabled).toBe(true);
+
+  const after = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), {
+    headers: { authorization: 'Bearer new-client-secret' }
+  });
+  expect(after.status).toBe(200);
+  runtime.jobs.close();
+});
+
+it('POST /v1/admin/access/keys returns 409 for duplicate id', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath: join(dir, 'access.yaml'),
+      managed: defaultManagedAccessConfig,
+      admin: {
+        enabled: true,
+        allowedIps: ['127.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+  const adminOpts = { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' };
+  const payload = { id: 'dup-key', keyHash: hashApiKey('dup-secret'), scopes: ['standalone'] };
+
+  const first = await requestJson(runtime.app, 'POST', '/v1/admin/access/keys', payload, adminOpts);
+  const second = await requestJson(runtime.app, 'POST', '/v1/admin/access/keys', payload, adminOpts);
+  expect(first.status).toBe(201);
+  expect(second.status).toBe(409);
+  runtime.jobs.close();
+});
+
+it('POST /v1/admin/access/keys returns 400 for invalid payload', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath: join(dir, 'access.yaml'),
+      managed: defaultManagedAccessConfig,
+      admin: {
+        enabled: true,
+        allowedIps: ['127.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+  const adminOpts = { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' };
+
+  const res = await requestJson(runtime.app, 'POST', '/v1/admin/access/keys', {
+    id: 'bad-key',
+    keyHash: 'not-a-valid-hash',
+    scopes: ['standalone']
+  }, adminOpts);
+  expect(res.status).toBe(400);
+  runtime.jobs.close();
+});
+
+it('DELETE /v1/admin/access/keys/:id revokes a key that stops working immediately', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath: join(dir, 'access.yaml'),
+      managed: {
+        ...defaultManagedAccessConfig,
+        planes: {
+          standalone: { enabled: true, auth: { requireApiKey: true, anonymous: 'reject' } },
+          runtimeAgent: { enabled: true, auth: { requireApiKey: false, anonymous: 'allow' } }
+        },
+        apiKeys: [{ id: 'to-revoke', keyHash: hashApiKey('revoke-secret'), enabled: true, scopes: ['standalone'] }]
+      },
+      admin: {
+        enabled: true,
+        allowedIps: ['127.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+  const adminOpts = { headers: { authorization: 'Bearer admin-secret' }, remoteAddress: '127.0.0.1' };
+
+  const before = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), {
+    headers: { authorization: 'Bearer revoke-secret' }
+  });
+  expect(before.status).toBe(200);
+
+  const del = await requestJson(runtime.app, 'DELETE', '/v1/admin/access/keys/to-revoke', undefined, adminOpts);
+  expect(del.status).toBe(200);
+  expect(del.body.revoked.id).toBe('to-revoke');
+
+  const after = await requestJson(runtime.app, 'POST', '/v1/chat/completions', baseRequest('Hello'), {
+    headers: { authorization: 'Bearer revoke-secret' }
+  });
+  expect(after.status).toBe(401);
+  runtime.jobs.close();
+});
+
+it('DELETE /v1/admin/access/keys/:id returns 404 for unknown id', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oar-access-'));
+  const config = testConfig({
+    access: {
+      bootstrapIfMissing: true,
+      managedConfigPath: join(dir, 'access.yaml'),
+      managed: defaultManagedAccessConfig,
+      admin: {
+        enabled: true,
+        allowedIps: ['127.0.0.1'],
+        trustedProxy: false,
+        apiKeyHashes: [hashApiKey('admin-secret')],
+        clientCert: { required: false, allowedFingerprints: [], allowedSubjects: [] },
+        auditLog: true
+      }
+    }
+  });
+  const runtime = createTestRuntime(config);
+
+  const res = await requestJson(runtime.app, 'DELETE', '/v1/admin/access/keys/does-not-exist', undefined, {
+    headers: { authorization: 'Bearer admin-secret' },
+    remoteAddress: '127.0.0.1'
+  });
+  expect(res.status).toBe(404);
+  runtime.jobs.close();
+});
+
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const started = Date.now();
   while (!predicate()) {

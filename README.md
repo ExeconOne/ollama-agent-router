@@ -94,6 +94,8 @@ Start with:
 ollama-agent-router serve --config examples/gex44.yaml
 ```
 
+`examples/gex44-secured.yaml` is the same hardware profile with the standalone plane locked down: API key required, anonymous access rejected, per-key rate limits, and the admin plane enabled on localhost. Use it as a starting point when the router is exposed beyond a single user or process.
+
 ## Config Reference
 
 Lookup order:
@@ -252,17 +254,22 @@ This prevents the admin API from changing the rules that protect itself. When `a
 
 Admin API:
 
+**Read the current managed access config**
+
 ```bash
 curl http://127.0.0.1:11435/v1/admin/access/config \
   -H 'authorization: Bearer admin-secret'
+```
 
+**Replace the entire managed access config** (planes + all keys at once)
+
+```bash
 curl -X PUT http://127.0.0.1:11435/v1/admin/access/config \
   -H 'authorization: Bearer admin-secret' \
   -H 'content-type: application/json' \
   -d '{
     "expectedVersion": 1,
     "config": {
-      "version": 1,
       "planes": {
         "standalone": {
           "enabled": true,
@@ -280,7 +287,51 @@ curl -X PUT http://127.0.0.1:11435/v1/admin/access/config \
   }'
 ```
 
-The admin `PUT` supports optimistic concurrency. If `expectedVersion` is present and does not match the active managed access config, the router returns `409`.
+`expectedVersion` enables optimistic concurrency. If present and the value does not match the active managed config version, the router returns `409`.
+
+**Add an API key**
+
+Generate a key and its SHA-256 hash first:
+
+```bash
+node -e "
+const c = require('crypto'), k = 'onr-' + c.randomBytes(20).toString('hex');
+console.log('key: ', k);
+console.log('hash: sha256:' + c.createHash('sha256').update(k).digest('hex'));
+"
+```
+
+Then add the key:
+
+```bash
+curl -X POST http://127.0.0.1:11435/v1/admin/access/keys \
+  -H 'authorization: Bearer admin-secret' \
+  -H 'content-type: application/json' \
+  -d '{
+    "id": "user-alice",
+    "name": "Alice",
+    "keyHash": "sha256:<hash>",
+    "scopes": ["standalone"],
+    "limits": {
+      "standalone": {"requests": 100, "windowSeconds": 60}
+    }
+  }'
+```
+
+Returns `201` with the created key entry. Returns `409` if the `id` is already in use.
+
+`scopes` controls which planes accept the key. Valid values are `standalone`, `runtimeAgent`, or both. `limits` is optional; when omitted, the plane's `defaultLimit` applies.
+
+**Revoke an API key**
+
+```bash
+curl -X DELETE http://127.0.0.1:11435/v1/admin/access/keys/user-alice \
+  -H 'authorization: Bearer admin-secret'
+```
+
+Returns `200 { "revoked": { ... } }` with the removed key entry. Returns `404` if the id is not found. The change takes effect immediately without a restart.
+
+All admin operations are written atomically to `access.managedConfigPath` and appended to the audit log when `auditLog: true`.
 
 For admin client certificate checks, enable HTTPS, configure `server.https.caPath`, and set:
 

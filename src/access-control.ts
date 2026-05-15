@@ -3,7 +3,7 @@ import net from 'node:net';
 import { TLSSocket } from 'node:tls';
 import { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
-import { managedAccessConfigSchema, writeManagedAccessConfig } from './access-config.js';
+import { apiKeySchema, managedAccessConfigSchema, writeManagedAccessConfig } from './access-config.js';
 import { AccessConfig, AccessPlane, AdminPlaneConfig, ApiKeyAccessConfig, ManagedAccessConfig, TrafficLimit } from './types.js';
 import { logger } from './logger.js';
 
@@ -60,6 +60,53 @@ export class AccessControlStore {
       this.limiter.clear();
     });
     return structuredClone(updated);
+  }
+
+  async addApiKey(input: unknown): Promise<ApiKeyAccessConfig> {
+    const key = apiKeySchema.parse(input);
+    await this.enqueueWrite(async () => {
+      if (this.managed.apiKeys.some((k) => k.id === key.id)) {
+        throw new AccessHttpError(409, `API key with id '${key.id}' already exists`);
+      }
+      if (!this.access.managedConfigPath) {
+        throw new AccessHttpError(500, 'access.managedConfigPath is not configured');
+      }
+      const next: ManagedAccessConfig = {
+        ...this.managed,
+        version: this.managed.version + 1,
+        updatedAt: new Date().toISOString(),
+        apiKeys: [...this.managed.apiKeys, key]
+      };
+      await writeManagedAccessConfig(this.access.managedConfigPath, next);
+      this.managed = next;
+      this.access.managed = next;
+    });
+    return structuredClone(key);
+  }
+
+  async revokeApiKey(id: string): Promise<ApiKeyAccessConfig> {
+    let removed!: ApiKeyAccessConfig;
+    await this.enqueueWrite(async () => {
+      const idx = this.managed.apiKeys.findIndex((k) => k.id === id);
+      if (idx === -1) {
+        throw new AccessHttpError(404, `API key '${id}' not found`);
+      }
+      if (!this.access.managedConfigPath) {
+        throw new AccessHttpError(500, 'access.managedConfigPath is not configured');
+      }
+      removed = this.managed.apiKeys[idx];
+      const next: ManagedAccessConfig = {
+        ...this.managed,
+        version: this.managed.version + 1,
+        updatedAt: new Date().toISOString(),
+        apiKeys: this.managed.apiKeys.filter((_, i) => i !== idx)
+      };
+      await writeManagedAccessConfig(this.access.managedConfigPath, next);
+      this.managed = next;
+      this.access.managed = next;
+      this.limiter.clear();
+    });
+    return structuredClone(removed);
   }
 
   publicMiddleware(planeOrPlanes: AccessPlane | AccessPlane[]) {
