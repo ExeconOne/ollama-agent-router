@@ -128,7 +128,6 @@ export interface ModelSpec {
   costClass: 'low' | 'medium' | 'high';
   exclusive: boolean;
   allowWhenBusy: boolean;
-  tags: string[];
 }
 
 export interface AppConfig {

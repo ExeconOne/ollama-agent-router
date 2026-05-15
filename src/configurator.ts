@@ -555,8 +555,7 @@ function buildModelSpec(name: string, role: ModelRole, sizeGb: number, cpuOnly: 
     timeoutMs: heavy ? 300_000 : code ? 180_000 : 90_000,
     costClass: heavy ? 'high' : code ? 'medium' : 'low',
     exclusive: heavy,
-    allowWhenBusy: !heavy,
-    tags: tagsForRole(role)
+    allowWhenBusy: !heavy
   };
 }
 
@@ -576,21 +575,6 @@ function purposesForRole(role: ModelRole): string[] {
   }
 }
 
-function tagsForRole(role: ModelRole): string[] {
-  switch (role) {
-    case 'code':
-      return ['code', 'fallback'];
-    case 'review':
-      return ['code', 'review'];
-    case 'heavy':
-      return ['reasoning', 'large_context'];
-    case 'tool':
-      return ['tool_use'];
-    case 'fast':
-    default:
-      return ['fast', 'chat'];
-  }
-}
 
 function generateRoutes(models: ModelSpec[]): Record<string, string[]> {
   const fast = models.filter((model) => model.costClass === 'low').map((model) => model.name);

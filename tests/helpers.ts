@@ -66,13 +66,12 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         timeoutMs: 10000,
         costClass: 'low',
         exclusive: false,
-        allowWhenBusy: true,
-        tags: []
+        allowWhenBusy: true
       },
       {
         name: 'qwen2.5-coder:7b',
         sizeGb: 4.7,
-        purpose: ['code_generate', 'code_fix', 'tool_use'],
+        purpose: ['code_generate', 'code_fix', 'tool_use', 'agentic_reasoning'],
         priority: 70,
         maxConcurrent: 1,
         defaultContext: 8192,
@@ -80,8 +79,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         timeoutMs: 10000,
         costClass: 'medium',
         exclusive: false,
-        allowWhenBusy: true,
-        tags: ['agentic_reasoning']
+        allowWhenBusy: true
       },
       {
         name: 'deepseek-coder:6.7b',
@@ -94,8 +92,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         timeoutMs: 10000,
         costClass: 'medium',
         exclusive: false,
-        allowWhenBusy: true,
-        tags: []
+        allowWhenBusy: true
       },
       {
         name: 'gpt-oss:20b',
@@ -108,8 +105,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         timeoutMs: 10000,
         costClass: 'high',
         exclusive: true,
-        allowWhenBusy: false,
-        tags: ['reasoning']
+        allowWhenBusy: false
       }
     ],
     routes: {

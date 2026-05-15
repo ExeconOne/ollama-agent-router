@@ -111,7 +111,6 @@ export class RoutingEngine {
     score += Math.max(0, 50 - routeIndex * 8);
     score += model.priority;
     if (model.purpose.includes(context.classification.taskType)) score += 25;
-    if (model.tags.includes(context.classification.taskType)) score += 15;
     if (preferredIndex >= 0) score += 80 - preferredIndex * 10;
     if (loaded) score += 20;
     if (context.classification.complexity === 'heavy' && model.costClass === 'high') score += 20;
@@ -135,7 +134,7 @@ export class RoutingEngine {
     for (const name of context.router.preferredModels) names.add(name);
     for (const name of routeNames) names.add(name);
     for (const model of this.config.models) {
-      if (model.purpose.includes(context.classification.taskType) || model.tags.includes(context.classification.taskType)) {
+      if (model.purpose.includes(context.classification.taskType)) {
         names.add(model.name);
       }
     }

@@ -21,8 +21,7 @@ export const modelSpecSchema = z.object({
   timeoutMs: z.number().int().positive(),
   costClass: z.enum(['low', 'medium', 'high']).default('medium'),
   exclusive: z.boolean().default(false),
-  allowWhenBusy: z.boolean().default(false),
-  tags: z.array(z.string()).default([])
+  allowWhenBusy: z.boolean().default(false)
 });
 
 export const appConfigSchema = z.object({
@@ -238,7 +237,6 @@ models:
     costClass: low
     exclusive: false
     allowWhenBusy: true
-    tags: [general]
 routes:
   triage: [llama3.2:3b]
   simple_chat: [llama3.2:3b]

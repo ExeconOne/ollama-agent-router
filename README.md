@@ -96,6 +96,219 @@ ollama-agent-router serve --config examples/gex44.yaml
 
 `examples/gex44-secured.yaml` is the same hardware profile with the standalone plane locked down: API key required, anonymous access rejected, per-key rate limits, and the admin plane enabled on localhost. Use it as a starting point when the router is exposed beyond a single user or process.
 
+## Routing Algorithm
+
+### Candidate selection
+
+For every request the router builds a candidate list from three sources, merged in order:
+
+1. `router.preferredModels` from the request — added first, regardless of `routes`.
+2. `routes[taskType]` — the ordered list for the classified task type.
+3. Any model whose `purpose` or `tags` array contains the task type — acts as a catch-all fallback.
+
+Models listed in `router.forbiddenModels` are dropped from the candidate list entirely.
+
+### Blocking checks
+
+Before scoring, each candidate is checked for hard blocks:
+
+- **`gpu_only`** — `requireGpuOnly` is set (globally or per-request) and the model is not fully on GPU, has a CPU/GPU split in `ollama ps`, or there is not enough free VRAM to load it.
+- **`busy`** — the model has `exclusive: true` and is already running, or `allowWhenBusy: false` and has reached `maxConcurrent`.
+
+Blocked models are excluded from sync selection but can still be picked for async jobs.
+
+### Scoring
+
+Every non-blocked candidate receives a numeric score. Higher score wins. Starting value: **100**.
+
+| Component | Delta | Notes |
+|---|---|---|
+| Route position | `+50` for index 0, `−8` per step | First entry in `routes[taskType]` gets the full bonus |
+| `model.priority` | `+priority` | Set per model, 1–100 |
+| `purpose` match | `+25` | Model's `purpose` array contains the task type |
+| `preferredModels` | `+80` for index 0, `−10` per step | Request-level override |
+| Already loaded in Ollama | **`+20`** | Model appears in `ollama ps` output |
+| Heavy complexity + `costClass: high` | `+20` | Classifier returned `heavy`; rewards large models |
+| Light complexity + `costClass: low` | `+15` | Classifier returned `light`; rewards small models |
+| Free VRAM headroom | `+0..+25` | Scales with `(freeMb − requiredMb) / 512`, capped at 25 |
+| Insufficient VRAM | **`−60`** | `model.sizeGb × 1024 + vramSafetyReserveMb > freeMb` |
+| Queue depth | `−18 × queueDepth` | Per-model queue length |
+| Running count | `−25 × running` | Per-model active executions |
+| Exclusive + running | `−80 × running` additional | `exclusive: true` models penalised heavily while in use |
+
+The candidate with the highest score is selected. The others appear in `fallbackModels` in the response.
+
+### Model config fields that affect routing
+
+```yaml
+models:
+  - name: gpt-oss:20b
+    sizeGb: 14.0          # used for VRAM headroom calculation
+    purpose: [agentic_reasoning, large_context, planning, tool_use, complex_debugging]
+                          # +25 score when task type matches; also adds model to the candidate list
+    priority: 95          # added directly to score; use to rank models of similar capability
+    maxConcurrent: 1      # hard cap on parallel executions
+    costClass: high       # low | medium | high — matched against request complexity for bonus/penalty
+    exclusive: true       # if running, gets −80 extra penalty per execution; only one at a time
+    allowWhenBusy: false  # if false and maxConcurrent reached → blocked entirely
+```
+
+**`purpose`** — declares what the model can do. Each entry that matches the request's task type adds `+25` to the score and also makes the model a candidate even when it is not listed in `routes[taskType]`. Use it for every task type the model handles well, including secondary ones (e.g. add `agentic_reasoning` to a coder model that works as a capable fallback).
+
+**`costClass`** — signals the relative weight of the model:
+- `high`: gets `+20` when the classifier decides the request is complex (`heavy`). Intended for large reasoning models.
+- `low`: gets `+15` when the request is simple (`light`). Intended for small triage/chat models.
+- `medium`: no complexity bonus in either direction.
+
+**`exclusive`** — intended for large models that cannot safely share GPU memory with another concurrent execution. While one request is running, the model accumulates `−80` per running job on top of the standard `−25`, making it effectively unselectable for sync requests until free.
+
+### `routes` config and its relation to scoring
+
+```yaml
+routes:
+  agentic_reasoning: [gpt-oss:20b, qwen2.5-coder:7b]
+```
+
+Order matters: `gpt-oss:20b` at index 0 gets `+50`, `qwen2.5-coder:7b` at index 1 gets `+42`. Each additional position costs `−8`.
+
+A model does not need to be in `routes` to be selected — if it declares the task type in `purpose` or `tags` it will still enter the candidate list (with a route-position score of 0).
+
+### Sync vs async decision
+
+After scoring, the router checks whether to run synchronously or push to the async queue:
+
+1. If `router.mode: async` — always async.
+2. If heavy load is detected (total queue depth ≥ `router.heavyLoadQueueDepth` **or** free VRAM < `router.heavyLoadGpuFreeMbThreshold`) and `allowAsync: true` — async.
+3. If the top-scored model is busy and `allowAsync: true` — async on that model.
+4. Otherwise — sync on the top-scored model.
+
+`allowAsync` defaults to `true`. Set `"router": {"mode": "sync"}` in the request to force synchronous execution regardless of load.
+
+### Forcing a specific model
+
+`preferredModels` adds `+80` to the first entry, making it win unless blocked by VRAM or busy constraints. `forbiddenModels` removes models from the candidate list entirely — useful when testing a specific model in isolation.
+
+### Request examples
+
+**Explicit task type — let the router pick the best model for the task:**
+
+```bash
+curl -s http://127.0.0.1:11435/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <api-key>' \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Plan a multi-service refactor"}],
+    "router": {
+      "taskType": "agentic_reasoning"
+    }
+  }'
+```
+
+**Explicit task type with async fallback on heavy load:**
+
+```bash
+curl -s http://127.0.0.1:11435/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <api-key>' \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Plan a multi-service refactor"}],
+    "router": {
+      "taskType": "agentic_reasoning",
+      "allowAsync": true
+    }
+  }'
+```
+
+Returns `202` with a job id when load is high; `200` with the result when run synchronously.
+
+**Force a specific model, block all others:**
+
+```bash
+curl -s http://127.0.0.1:11435/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <api-key>' \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Review this PR diff"}],
+    "router": {
+      "taskType": "code_review",
+      "preferredModels": ["gpt-oss:20b"],
+      "forbiddenModels": ["qwen2.5-coder:7b", "deepseek-coder:6.7b"]
+    }
+  }'
+```
+
+**Force sync, no async fallback even under load:**
+
+```bash
+curl -s http://127.0.0.1:11435/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <api-key>' \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Fix the off-by-one error"}],
+    "router": {
+      "taskType": "code_fix",
+      "mode": "sync",
+      "allowAsync": false
+    }
+  }'
+```
+
+**High priority request — jumps ahead in the queue:**
+
+```bash
+curl -s http://127.0.0.1:11435/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <api-key>' \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Summarize this log"}],
+    "router": {
+      "taskType": "summarize",
+      "priority": "high"
+    }
+  }'
+```
+
+**GPU-only — reject if model would run on CPU or with a CPU/GPU split:**
+
+```bash
+curl -s http://127.0.0.1:11435/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer <api-key>' \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "Generate a REST API scaffold"}],
+    "router": {
+      "taskType": "code_generate",
+      "requireGpuOnly": true
+    }
+  }'
+```
+
+Returns `503` if no GPU-only candidate is available.
+
+**Check what the router decided** — every `200` response includes a `router` object:
+
+```json
+{
+  "router": {
+    "mode": "sync",
+    "taskType": "agentic_reasoning",
+    "selectedModel": "gpt-oss:20b",
+    "fallbackModels": ["gpt-oss:20b", "qwen2.5-coder:7b"],
+    "queueTimeMs": 3,
+    "executionTimeMs": 8420,
+    "decisionReason": "Selected gpt-oss:20b for agentic_reasoning with score 290.0"
+  }
+}
+```
+
+`decisionReason` includes the winning score, which helps diagnose unexpected model selection — compare it against the scoring table above to see which component tipped the balance.
+
 ## Config Reference
 
 Lookup order:

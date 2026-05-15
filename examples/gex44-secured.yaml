@@ -127,11 +127,10 @@ models:
     costClass: low
     exclusive: false
     allowWhenBusy: true
-    tags: [fast, chat, summarize]
 
   - name: qwen2.5-coder:7b
     sizeGb: 4.7
-    purpose: [code_generate, code_fix, tool_use, simple_agent]
+    purpose: [code_generate, code_fix, tool_use, simple_agent, agentic_reasoning]
     priority: 70
     maxConcurrent: 1
     defaultContext: 8192
@@ -140,7 +139,6 @@ models:
     costClass: medium
     exclusive: false
     allowWhenBusy: true
-    tags: [code, agentic_reasoning, fallback]
 
   - name: deepseek-coder:6.7b
     sizeGb: 3.8
@@ -153,7 +151,6 @@ models:
     costClass: medium
     exclusive: false
     allowWhenBusy: true
-    tags: [code, review]
 
   - name: gpt-oss:20b
     sizeGb: 14.0
@@ -166,7 +163,6 @@ models:
     costClass: high
     exclusive: true
     allowWhenBusy: false
-    tags: [reasoning, large_context, tool_use]
 
 routes:
   triage: [B-A-M-N/vibethinker:1.5b]
