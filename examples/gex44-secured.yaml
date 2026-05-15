@@ -53,12 +53,22 @@ jobs:
 # The managed config is bootstrapped to access-managed.yaml on first start;
 # keys and rate limits can then be updated at runtime via the admin plane.
 #
-# Admin plane (plane admin) is localhost-only and protects all /admin/* routes.
-# Use the generated admin key below to authenticate admin requests.
+# Admin plane is localhost-only and protects all /v1/admin/* routes.
 #
-# Generated keys — keep these secret, rotate via admin API as needed:
-#   Standalone API key : onr-30d48823383de815b07dc83e3f6331a91fe86b9b
-#   Admin API key      : onr-adm-587b53d54af9d41c79d8fbc84f4360d319213953
+# Before use: generate your own keys and replace the placeholder hashes below.
+#
+#   node -e "
+#     const c = require('crypto');
+#     const standalone = 'onr-' + c.randomBytes(20).toString('hex');
+#     const admin     = 'onr-adm-' + c.randomBytes(20).toString('hex');
+#     console.log('standalone key :', standalone);
+#     console.log('standalone hash: sha256:' + c.createHash('sha256').update(standalone).digest('hex'));
+#     console.log('admin key      :', admin);
+#     console.log('admin hash     : sha256:' + c.createHash('sha256').update(admin).digest('hex'));
+#   "
+#
+# Store the plaintext keys securely (password manager / secret vault).
+# Only the sha256: hashes belong in this file.
 # ---------------------------------------------------------------------------
 access:
   managedConfigPath: ./access-managed.yaml
@@ -83,7 +93,7 @@ access:
     apiKeys:
       - id: gex44-default-client
         name: Default standalone client
-        keyHash: "sha256:796a49aa89d64950ac7d3af99a3d22ddf9c44bfe60680e21e6d9e4dca9d77085"
+        keyHash: "sha256:replace-with-standalone-key-hash"
         enabled: true
         scopes: [standalone]
         limits:
@@ -98,7 +108,7 @@ access:
       - "::1"
     trustedProxy: false
     apiKeyHashes:
-      - "sha256:a5410ce1b449e1d6ca3e1376710666bcd261cefdc4be325351bebfab93387a21"
+      - "sha256:replace-with-admin-key-hash"
     clientCert:
       required: false
       allowedFingerprints: []
