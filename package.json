@@ -1,6 +1,6 @@
 {
   "name": "ollama-agent-router",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Ollama agent router and local LLM router for OpenAI-compatible model routing, GPU-aware queues, async jobs, and CLI configuration.",
   "type": "module",
   "license": "MIT",
